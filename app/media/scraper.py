@@ -530,7 +530,7 @@ class Scraper:
                 scraper_tv_pic = self._scraper_pic.get("tv")
                 # tv nfo
                 if force_nfo \
-                        or not os.path.exists(os.path.join(os.path.dirname(dir_path), "tvshow.nfo")):
+                        or not os.path.exists(os.path.join(dir_path, "tvshow.nfo")):
                     if scraper_tv_nfo.get("basic") or scraper_tv_nfo.get("credits"):
                         # 查询Douban信息
                         if scraper_tv_nfo.get("credits") and scraper_tv_nfo.get("credits_chinese"):
@@ -541,42 +541,42 @@ class Scraper:
                         self.__gen_tv_nfo_file(tmdbinfo=media.tmdb_info,
                                                doubaninfo=doubaninfo,
                                                scraper_tv_nfo=scraper_tv_nfo,
-                                               out_path=os.path.dirname(dir_path))
+                                               out_path=dir_path)
                 # poster
                 if scraper_tv_pic.get("poster"):
                     poster_image = media.get_poster_image(original=True)
                     if poster_image:
-                        self.__save_image(poster_image, os.path.dirname(dir_path), "poster", force_pic)
+                        self.__save_image(poster_image, dir_path, "poster", force_pic)
                 # backdrop
                 if scraper_tv_pic.get("backdrop"):
                     backdrop_image = media.get_backdrop_image(default=False, original=True)
                     if backdrop_image:
-                        self.__save_image(backdrop_image, os.path.dirname(dir_path), "fanart", force_pic)
+                        self.__save_image(backdrop_image, dir_path, "fanart", force_pic)
                 # background
                 if scraper_tv_pic.get("background"):
                     background_image = media.fanart.get_background(media_type=media.type, queryid=media.tvdb_id)
                     if background_image:
-                        self.__save_image(background_image, os.path.dirname(dir_path), "background", force_pic)
+                        self.__save_image(background_image, dir_path, "background", force_pic)
                 # logo
                 if scraper_tv_pic.get("logo"):
                     logo_image = media.fanart.get_logo(media_type=media.type, queryid=media.tvdb_id)
                     if logo_image:
-                        self.__save_image(logo_image, os.path.dirname(dir_path), "logo", force_pic)
+                        self.__save_image(logo_image, dir_path, "logo", force_pic)
                 # clearart
                 if scraper_tv_pic.get("clearart"):
                     clearart_image = media.fanart.get_disc(media_type=media.type, queryid=media.tvdb_id)
                     if clearart_image:
-                        self.__save_image(clearart_image, os.path.dirname(dir_path), "clearart", force_pic)
+                        self.__save_image(clearart_image, dir_path, "clearart", force_pic)
                 # banner
                 if scraper_tv_pic.get("banner"):
                     banner_image = media.fanart.get_banner(media_type=media.type, queryid=media.tvdb_id)
                     if banner_image:
-                        self.__save_image(banner_image, os.path.dirname(dir_path), "banner", force_pic)
+                        self.__save_image(banner_image, dir_path, "banner", force_pic)
                 # thumb
                 if scraper_tv_pic.get("thumb"):
                     thumb_image = media.fanart.get_thumb(media_type=media.type, queryid=media.tvdb_id)
                     if thumb_image:
-                        self.__save_image(thumb_image, os.path.dirname(dir_path), "thumb", force_pic)
+                        self.__save_image(thumb_image, dir_path, "thumb", force_pic)
                 # season nfo
                 if scraper_tv_nfo.get("season_basic"):
                     if force_nfo \
@@ -610,7 +610,7 @@ class Scraper:
                                                                  season=media.get_season_seq())
                     if seasonposter:
                         self.__save_image(seasonposter,
-                                          os.path.dirname(dir_path),
+                                          dir_path,
                                           season_poster,
                                           force_pic)
                     else:
@@ -619,7 +619,7 @@ class Scraper:
                         if seasoninfo:
                             self.__save_image(Config().get_tmdbimage_url(seasoninfo.get("poster_path"),
                                                                          prefix="original"),
-                                              os.path.dirname(dir_path),
+                                              dir_path,
                                               season_poster,
                                               force_pic)
                 # season banner
@@ -629,7 +629,7 @@ class Scraper:
                                                                  season=media.get_season_seq())
                     if seasonbanner:
                         self.__save_image(seasonbanner,
-                                          os.path.dirname(dir_path),
+                                          dir_path,
                                           "season%s-banner" % media.get_season_seq().rjust(2, '0'),
                                           force_pic)
                 # season thumb
@@ -639,7 +639,7 @@ class Scraper:
                                                                season=media.get_season_seq())
                     if seasonthumb:
                         self.__save_image(seasonthumb,
-                                          os.path.dirname(dir_path),
+                                          dir_path,
                                           "season%s-landscape" % media.get_season_seq().rjust(2, '0'),
                                           force_pic)
                 # episode thumb
@@ -722,3 +722,4 @@ class Scraper:
                 if latin_match_res or (people_douban.get("name") == people_aka_name):
                     return people_douban
         return None
+
