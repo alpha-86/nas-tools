@@ -493,37 +493,37 @@ class Scraper:
                 if scraper_movie_pic.get("poster"):
                     poster_image = media.get_poster_image(original=True)
                     if poster_image:
-                        self.__save_image(poster_image, dir_path, "poster", force_pic)
+                        self.__save_image(poster_image, dir_path, "%s-poster" % file_name, force_pic)
                 # backdrop
                 if scraper_movie_pic.get("backdrop"):
                     backdrop_image = media.get_backdrop_image(default=False, original=True)
                     if backdrop_image:
-                        self.__save_image(backdrop_image, dir_path, "fanart", force_pic)
+                        self.__save_image(backdrop_image, dir_path, "%s-fanart" % file_name, force_pic)
                 # background
                 if scraper_movie_pic.get("background"):
                     background_image = media.fanart.get_background(media_type=media.type, queryid=media.tmdb_id)
                     if background_image:
-                        self.__save_image(background_image, dir_path, "background", force_pic)
+                        self.__save_image(background_image, dir_path, "%s-background" % file_name, force_pic)
                 # logo
                 if scraper_movie_pic.get("logo"):
                     logo_image = media.fanart.get_logo(media_type=media.type, queryid=media.tmdb_id)
                     if logo_image:
-                        self.__save_image(logo_image, dir_path, "logo", force_pic)
+                        self.__save_image(logo_image, dir_path, "%s-logo" % file_name, force_pic)
                 # disc
                 if scraper_movie_pic.get("disc"):
                     disc_image = media.fanart.get_disc(media_type=media.type, queryid=media.tmdb_id)
                     if disc_image:
-                        self.__save_image(disc_image, dir_path, "disc", force_pic)
+                        self.__save_image(disc_image, dir_path, "%s-disc" % file_name, force_pic)
                 # banner
                 if scraper_movie_pic.get("banner"):
                     banner_image = media.fanart.get_banner(media_type=media.type, queryid=media.tmdb_id)
                     if banner_image:
-                        self.__save_image(banner_image, dir_path, "banner", force_pic)
+                        self.__save_image(banner_image, dir_path, "%s-banner" % file_name, force_pic)
                 # thumb
                 if scraper_movie_pic.get("thumb"):
                     thumb_image = media.fanart.get_thumb(media_type=media.type, queryid=media.tmdb_id)
                     if thumb_image:
-                        self.__save_image(thumb_image, dir_path, "thumb", force_pic)
+                        self.__save_image(thumb_image, dir_path, "%s-thumb" % file_name, force_pic)
             # 电视剧
             else:
                 scraper_tv_nfo = self._scraper_nfo.get("tv")
