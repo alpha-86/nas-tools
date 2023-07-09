@@ -47,7 +47,7 @@ class MetaVideo(MetaBase):
                         r"|CD[\s.]*[1-9]|DVD[\s.]*[1-9]|DISK[\s.]*[1-9]|DISC[\s.]*[1-9]"
 
     _tv_name_nostring_re = r"^PTS|^JADE|^AOD|^CHC|^[A-Z]{1,4}TV[\-0-9UVHDK]*" \
-                        r"|HBO$|\s+HBO|\d{1}th|\d{1,2}bit|NETFLIX|AMAZON|IMAX|^3D|\s+3D|^BBC\s+|\s+BBC|BBC$|DISNEY\+?|XXX|\s+DC$" \
+                        r"|HBO$|\s+HBO|\D\d{1}th|\d{1,2}bit|NETFLIX|AMAZON|IMAX|^3D|\s+3D|^BBC\s+|\s+BBC|BBC$|DISNEY\+?|XXX|\s+DC$" \
                         r"|[第\s共]+[0-9一二三四五六七八九十\-\s]+季" \
                         r"|[第\s共]+[0-9一二三四五六七八九十百零\-\s]+[集话話]" \
                         r"|连载|日剧|美剧|电视剧|动画片|动漫|欧美|西德|日韩|超高清|高清|蓝光|翡翠台|梦幻天堂·龙网|★?\d*月?新番" \
