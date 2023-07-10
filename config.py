@@ -161,8 +161,8 @@ class Config(object):
     def get_video_name_mapping(self, name):
         if not name:
             return name
-        name = name.replace(' ','_')
-        new_name = self._video_name_mapping.get(name,name)
+        key_name = name.replace(' ','_')
+        new_name = self._video_name_mapping.get(key_name,name)
         return new_name
 
     @property
