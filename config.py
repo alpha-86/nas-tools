@@ -149,12 +149,12 @@ class Config(object):
         self._video_name_mapping={}
         if not os.path.exists(mapping_config_file):
             return
-        with open(file_name, mode='r', encoding='utf-8') as cf:
+        with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
             try:
                 # 读取配置
                 self._video_name_mapping = ruamel.yaml.YAML().load(cf)
             except Exception as e:
-                print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (file_name, str(e)))
+                print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
                 self._video_name_mapping={}
         return
 
