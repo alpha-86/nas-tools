@@ -147,6 +147,8 @@ class Config(object):
     def init_video_name_mapping(self):
         mapping_config_file = self.get_video_name_mapping_file()
         self._video_name_mapping={}
+        if not mapping_config_file:
+            return
         if not os.path.exists(mapping_config_file):
             return
         with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
