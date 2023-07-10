@@ -101,6 +101,7 @@ class Config(object):
     _config = {}
     _config_path = None
     _user = None
+    _video_name_mapping = {}
 
     def __init__(self):
         self._config_path = os.environ.get('NASTOOL_CONFIG')
@@ -108,6 +109,7 @@ class Config(object):
             os.environ['TZ'] = 'Asia/Shanghai'
         self.init_syspath()
         self.init_config()
+        self.init_video_name_mapping()
 
     def init_config(self):
         try:
@@ -141,6 +143,28 @@ class Config(object):
                                            third_party_lib.strip()).replace("\\", "/")
                 if module_path not in sys.path:
                     sys.path.append(module_path)
+
+    def init_video_name_mapping(self):
+        mapping_config_file = self.get_video_name_mapping_file()
+        self._video_name_mapping={}
+        if not os.path.exists(mapping_config_file):
+            return
+        try:
+            with open(file_name, mode='r', encoding='utf-8') as cf:
+                try:
+                    # 读取配置
+                    self._video_name_mapping = ruamel.yaml.YAML().load(cf)
+                except Exception as e:
+                    print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (file_name, str(e)))
+                    self._video_name_mapping={}
+        return
+
+    def get_video_name_mapping(self, name):
+        if not name:
+            return name
+        name = name.replace(' ','_')
+        new_name = self._video_name_mapping.get(name,name)
+        return new_name
 
     @property
     def current_user(self):
@@ -203,6 +227,10 @@ class Config(object):
         global RMT_FAVTYPE
         if favtype:
             RMT_FAVTYPE = favtype
+
+    def get_video_name_mapping_file(self):
+        file_name = self.get_config("app").get("video_name_mapping_file")
+        return file_name
 
     def get_tmdbapi_url(self):
         return f"https://{self.get_config('app').get('tmdb_domain') or TMDB_API_DOMAINS[0]}/3"

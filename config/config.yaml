@@ -56,6 +56,8 @@ app:
   debug: true
   # 开启后，只有Releases更新，才会有更新提示
   releases_update_only: false
+  # 视频名称mapping的路径
+  video_name_mapping_file: /config/video_name_mapping.yaml
 
 # 【配置媒体库信息】
 media:

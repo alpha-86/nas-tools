@@ -8,7 +8,7 @@ from app.utils.tokens import Tokens
 from app.utils.types import MediaType
 from app.media.meta.release_groups import ReleaseGroupsMatcher
 from app.media.meta.customization import CustomizationMatcher
-
+from config import Config
 
 class MetaVideo(MetaBase):
     """
@@ -172,6 +172,7 @@ class MetaVideo(MetaBase):
                 name = None
             elif self.is_in_episode(int(name)) and not self.begin_season:
                 name = None
+        name = Config().get_video_name_mapping(name)
         return name
 
     def __init_name(self, token):
