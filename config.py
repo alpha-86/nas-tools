@@ -148,8 +148,6 @@ class Config(object):
     def init_video_name_mapping(self):
         mapping_config_file = self.get_video_name_mapping_file()
         self._video_name_mapping={}
-        if not mapping_config_file:
-            mapping_config_file="/config/video_name_mapping.yaml"
         if not os.path.exists(mapping_config_file):
             return
         with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
@@ -163,6 +161,7 @@ class Config(object):
         return
 
     def check_and_reload_video_name_mapping(self):
+        mapping_config_file = self.get_video_name_mapping_file()
         now_mtime = os.path.getatime(mapping_config_file)
         if now_mtime > self._video_name_mapping_mtime:
             self.init_video_name_mapping()
@@ -240,6 +239,8 @@ class Config(object):
 
     def get_video_name_mapping_file(self):
         file_name = self.get_config("app").get("video_name_mapping_file")
+        if not file_name:
+            file_name = "/config/video_name_mapping.yaml"
         return file_name
 
     def get_tmdbapi_url(self):
