@@ -102,6 +102,7 @@ class Config(object):
     _config_path = None
     _user = None
     _video_name_mapping = {}
+    _video_name_mapping_mtime=None
 
     def __init__(self):
         self._config_path = os.environ.get('NASTOOL_CONFIG')
@@ -155,14 +156,22 @@ class Config(object):
             try:
                 # 读取配置
                 self._video_name_mapping = ruamel.yaml.YAML().load(cf)
+                self._video_name_mapping_mtime=os.path.getatime(mapping_config_file)
             except Exception as e:
                 print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
                 self._video_name_mapping={}
         return
 
+    def check_and_reload_video_name_mapping(self):
+        now_mtime = os.path.getatime(mapping_config_file)
+        if now_mtime > self._video_name_mapping_mtime:
+            self.init_video_name_mapping()
+
+
     def get_video_name_mapping(self, name):
         if not name:
             return name
+        self.check_and_reload_video_name_mapping()
         key_name = name.replace(' ','_')
         new_name = self._video_name_mapping.get(key_name,name)
         return new_name
