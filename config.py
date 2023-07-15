@@ -102,7 +102,7 @@ class Config(object):
     _config_path = None
     _user = None
     _video_name_mapping = {}
-    _video_name_mapping_mtime=None
+    _video_name_mapping_mtime=0
 
     def __init__(self):
         self._config_path = os.environ.get('NASTOOL_CONFIG')
