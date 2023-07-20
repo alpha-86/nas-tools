@@ -10,3 +10,6 @@ os.system("cp /config/video_name_mapping.yaml2 /config/video_name_mapping.yaml")
 title = "The Long Season2 2017 2160p WEB-DL H265 AAC-XXX"
 meta_info = MetaInfo(title=title)
 print("raw_name[%s]en_name[%s]"%(title, meta_info.en_name))
+title = "The.Movie.Test.2017.2160p.WEB-DL.H265.AAC-XXX"
+meta_info = MetaInfo(title=title)
+print("raw_name[%s]en_name[%s]"%(title, meta_info.en_name))
