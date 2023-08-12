@@ -11,3 +11,5 @@ with open(config_path, mode='r', encoding='utf-8') as cf:
 print(config)
 vvv=config.get("abc2")
 print(vvv)
+
+#test
