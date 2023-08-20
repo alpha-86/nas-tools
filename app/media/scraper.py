@@ -76,6 +76,7 @@ class Scraper:
                                                                  tmdbid=tmdbid,
                                                                  append_to_response='all'))
                 media_info = meta_info
+                continue
             else:
                 medias = self.media.get_media_info_on_files(file_list=[file],
                                                             append_to_response="all")
