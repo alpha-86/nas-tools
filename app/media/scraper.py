@@ -72,11 +72,11 @@ class Scraper:
                     tmdbid = self.__get_tmdbid_from_nfo(tv_nfo)
             if tmdbid and not force_nfo:
                 log.info(f"【Scraper】读取到本地nfo文件的tmdbid：{tmdbid}")
+                continue
                 meta_info.set_tmdb_info(self.media.get_tmdb_info(mtype=meta_info.type,
                                                                  tmdbid=tmdbid,
                                                                  append_to_response='all'))
                 media_info = meta_info
-                continue
             else:
                 medias = self.media.get_media_info_on_files(file_list=[file],
                                                             append_to_response="all")
