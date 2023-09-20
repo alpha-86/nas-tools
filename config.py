@@ -171,7 +171,7 @@ class Config(object):
         if not name:
             return name
         self.check_and_reload_video_name_mapping()
-        key_name = name.replace(' ','_')
+        key_name = name.replace(' ','_').lower()
         new_name = self._video_name_mapping.get(key_name,name)
         return new_name
 
