@@ -15,3 +15,5 @@ redis
 wget
 shadow
 sudo
+intel-media-driver
+libva-utils
