@@ -1,10 +1,21 @@
 import json
 import subprocess
+import os
 
 from app.utils import SystemUtils
 
 
 class FfmpegHelper:
+
+    @staticmethod
+    def get_intel_gpu_device_path():
+        return "/dev/dri/renderD128"
+
+    @staticmethod
+    def intel_gpu_exist_check():
+        device_path = FfmpegHelper().get_intel_gpu_device_path()
+        return os.path.exists(device_path)
+
 
     @staticmethod
     def get_thumb_image_from_video(video_path, image_path, frames="00:03:01"):
@@ -13,7 +24,16 @@ class FfmpegHelper:
         """
         if not video_path or not image_path:
             return False
-        cmd = 'ffmpeg -i "{video_path}" -ss {frames} -vframes 1 -f image2 "{image_path}"'.format(video_path=video_path,
+
+        cmd = ''
+        if FfmpegHelper().intel_gpu_exist_check():
+            device_path = FfmpegHelper().get_intel_gpu_device_path()
+            cmd = 'ffmpeg -hwaccel vaapi -hwaccel_device {device_path} -hwaccel_output_format vaapi -i "{video_path}" -ss {frames} -frames:v 1 -c:v mjpeg_vaapi -f "{image_path}"'.format(device_path=device_path,
+                    video_path=video_path,
+                    frames=frames,
+                    image_path=image_path)
+        else:
+            cmd = 'ffmpeg -i "{video_path}" -ss {frames} -vframes 1 -f image2 "{image_path}"'.format(video_path=video_path,
                                                                                                  frames=frames,
                                                                                                  image_path=image_path)
         result = SystemUtils.execute(cmd)
