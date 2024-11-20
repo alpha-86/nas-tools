@@ -16,4 +16,8 @@ wget
 shadow
 sudo
 intel-media-driver
+libva-dev
 libva-utils
+intel-gpu-tools
+cython
+pipx
