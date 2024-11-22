@@ -1,8 +1,5 @@
 git
 python3-dev
-py3-pip
-py3-setuptools
-py3-wheel
 tzdata
 zip
 curl
