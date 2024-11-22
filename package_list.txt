@@ -17,4 +17,3 @@ sudo
 intel-media-driver
 libva-dev
 libva-utils
-cython
