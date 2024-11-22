@@ -1,6 +1,8 @@
 git
 python3-dev
 py3-pip
+py3-setuptools
+py3-wheel
 tzdata
 zip
 curl
@@ -20,4 +22,3 @@ libva-dev
 libva-utils
 intel-gpu-tools
 cython
-pipx
