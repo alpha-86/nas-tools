@@ -3,6 +3,8 @@ import shutil
 import sys
 from threading import Lock
 import ruamel.yaml
+import re
+from app.utils.types import MediaType
 
 # 种子名/文件名要素分隔字符
 SPLIT_CHARS = r"\.|\s+|\(|\)|\[|]|-|\+|【|】|/|～|;|&|\||#|_|「|」|~"
@@ -103,6 +105,9 @@ class Config(object):
     _user = None
     _video_name_mapping = {}
     _video_name_mapping_mtime=0
+    _tmdb_id_mapping = {}
+    _r_tmdb_id_mapping = {}
+    _tmdb_id_mapping_mtime=0
 
     def __init__(self):
         self._config_path = os.environ.get('NASTOOL_CONFIG')
@@ -111,6 +116,7 @@ class Config(object):
         self.init_syspath()
         self.init_config()
         self.init_video_name_mapping()
+        self.init_tmdb_id_mapping()
 
     def init_config(self):
         try:
@@ -174,6 +180,60 @@ class Config(object):
         key_name = name.replace(' ','_').lower()
         new_name = self._video_name_mapping.get(key_name,name)
         return new_name
+
+    def init_tmdb_id_mapping(self):
+        mapping_config_file = self.get_tmdb_id_mapping_file()
+        self._tmdb_id_mapping = {}
+        self._r_tmdb_id_mapping = {}
+        self._tmdb_id_mapping_mtime = 0
+        if not os.path.exists(mapping_config_file):
+            return
+        with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
+            try:
+                # 读取配置
+                for line in cf.readlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 先检查是否是正则表达式规则
+                    if line.startswith("r:"):
+                        is_regex, video_name, media_type, tmdb_id = line.split(":")
+                        media_type = media_type.strip().lower()
+                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
+                        self._r_tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
+                    else:
+                        # 普通规则使用简单的split
+                        video_name, media_type, tmdb_id = line.split(":")
+                        media_type = media_type.strip().lower()
+                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
+                        self._tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
+                self._tmdb_id_mapping_mtime = os.path.getatime(mapping_config_file)
+            except Exception as e:
+                print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
+                self._tmdb_id_mapping = {}
+                self._r_tmdb_id_mapping = {}
+                self._tmdb_id_mapping_mtime = 0
+        return
+
+    def check_and_reload_tmdb_id_mapping(self):
+        mapping_config_file = self.get_tmdb_id_mapping_file()
+        now_mtime = os.path.getatime(mapping_config_file)
+        if now_mtime > self._tmdb_id_mapping_mtime:
+            self.init_tmdb_id_mapping()
+
+    def get_tmdb_id_mapping(self, name):
+        if not name:
+            return name
+        self.check_and_reload_tmdb_id_mapping()
+        # 先尝试精确匹配
+        result = self._tmdb_id_mapping.get(name)
+        if result:
+            return result
+        # 如果精确匹配失败，尝试正则表达式匹配
+        for regex, value in self._r_tmdb_id_mapping.items():
+            if re.match(regex, name):
+                return value
+        return 0
 
     @property
     def current_user(self):
@@ -241,6 +301,12 @@ class Config(object):
         file_name = self.get_config("app").get("video_name_mapping_file")
         if not file_name:
             file_name = "/config/video_name_mapping.yaml"
+        return file_name
+
+    def get_tmdb_id_mapping_file(self):
+        file_name = self.get_config("app").get("tmdb_id_mapping_file")
+        if not file_name:
+            file_name = "/config/tmdb_id_mapping.conf"
         return file_name
 
     def get_tmdbapi_url(self):
