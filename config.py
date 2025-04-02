@@ -309,7 +309,7 @@ class Config(object):
     def get_tmdbapi_url(self):
         return f"https://{self.get_config('app').get('tmdb_domain') or TMDB_API_DOMAINS[0]}/3"
 
-    def get_tmdbimage_url(self, path, prefix="w500"):
+    def get_tmdbimage_url(self, path, prefix="w454_and_h254_bestv2"):
         if not path:
             return ""
         tmdb_image_url = self.get_config("app").get("tmdb_image_url")
