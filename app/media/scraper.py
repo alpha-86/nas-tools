@@ -305,6 +305,18 @@ class Scraper:
         # 保存
         self.__save_nfo(doc, os.path.join(out_path, "season.nfo"))
 
+    def __get_episode_thumb_from_season_info(self, seasoninfo, episode):
+        """
+        从TMDB季信息中获取剧集海报
+        """
+        episode_detail = {}
+        for episode_info in seasoninfo.get("episodes") or []:
+            if int(episode_info.get("episode_number")) == int(episode):
+                episode_detail = episode_info
+        if not episode_detail:
+            return
+        return episode_detail.get("still_path")
+
     def __gen_tv_episode_nfo_file(self,
                                   seasoninfo: dict,
                                   scraper_tv_nfo,
@@ -648,11 +660,14 @@ class Scraper:
                     episode_thumb = os.path.join(dir_path, file_name + "-thumb.jpg")
                     if not os.path.exists(episode_thumb):
                         # 优先从TMDB查询
-                        episode_image = self.media.get_episode_images(tv_id=media.tmdb_id,
-                                                                      season_id=media.get_season_seq(),
-                                                                      episode_id=media.get_episode_seq(),
-                                                                      orginal= True)
+                        # episode_image = self.media.get_episode_images(tv_id=media.tmdb_id,
+                        #                                              season_id=media.get_season_seq(),
+                        #                                              episode_id=media.get_episode_seq(),
+                        #                                              orginal= True)
+                        episode_image = self.__get_episode_thumb_from_season_info(seasoninfo=seasoninfo,
+                                                                                 episode=media.get_episode_seq())
                         if episode_image:
+                            episode_image = Config().get_tmdbimage_url(episode_image, prefix="original")
                             self.__save_image(episode_image, episode_thumb, '', force_pic)
                         else:
                             # 开启ffmpeg，则从视频文件生成缩略图
