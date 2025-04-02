@@ -739,7 +739,14 @@ class Media:
         if mtype:
             meta_info.type = mtype
         media_key = self.__make_cache_key(meta_info)
-        if not cache or not self.meta.get_meta_data_by_key(media_key):
+        tmdb_id = self.config.get_tmdb_id_mapping(title)
+        if tmdb_id:
+            media_type, tmdb_id = tmdb_id
+            file_media_info = self.get_tmdb_info(mtype=media_type,
+                                                     tmdbid=tmdb_id,
+                                                     chinese=chinese,
+                                                     append_to_response=append_to_response)
+        elif not cache or not self.meta.get_meta_data_by_key(media_key):
             # 缓存没有或者强制不使用缓存
             if meta_info.type != MediaType.TV and not meta_info.year:
                 file_media_info = self.__search_multi_tmdb(file_media_name=meta_info.get_name())
@@ -929,7 +936,14 @@ class Media:
                         continue
                     # 区配缓存及TMDB
                     media_key = self.__make_cache_key(meta_info)
-                    if not self.meta.get_meta_data_by_key(media_key):
+                    tmdb_id = self.config.get_tmdb_id_mapping(meta_info.get_name())
+                    if tmdb_id:
+                        media_type, tmdb_id = tmdb_id
+                        file_media_info = self.get_tmdb_info(mtype=media_type,
+                                                             tmdbid=tmdb_id,
+                                                             chinese=chinese,
+                                                             append_to_response=append_to_response)
+                    elif not self.meta.get_meta_data_by_key(media_key):
                         # 没有缓存数据
                         file_media_info = self.__search_tmdb(file_media_name=meta_info.get_name(),
                                                              first_media_year=meta_info.year,
