@@ -651,7 +651,7 @@ class Scraper:
                         episode_image = self.media.get_episode_images(tv_id=media.tmdb_id,
                                                                       season_id=media.get_season_seq(),
                                                                       episode_id=media.get_episode_seq(),
-                                                                      orginal= False)
+                                                                      orginal= True)
                         if episode_image:
                             self.__save_image(episode_image, episode_thumb, '', force_pic)
                         else:
