@@ -742,6 +742,7 @@ class Media:
         tmdb_id = Config().get_tmdb_id_mapping(title)
         if tmdb_id:
             media_type, tmdb_id = tmdb_id
+            log.info("【Meta】func[get_media_info]get_tmdb_id_mapping：[%s][%s]" % (tmdb_id, title))
             media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
             file_media_info = self.get_tmdb_info(mtype=media_type,
                                                      tmdbid=tmdb_id,
@@ -937,9 +938,10 @@ class Media:
                         continue
                     # 区配缓存及TMDB
                     media_key = self.__make_cache_key(meta_info)
-                    tmdb_id = Config().get_tmdb_id_mapping(meta_info.get_name())
+                    tmdb_id = Config().get_tmdb_id_mapping(file_name)
                     if tmdb_id:
                         media_type, tmdb_id = tmdb_id
+                        log.info("【Meta】func[get_media_info_on_files]get_tmdb_id_mapping：[%s][%s]" % (tmdb_id, file_name))
                         media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
                         file_media_info = self.get_tmdb_info(mtype=media_type,
                                                              tmdbid=tmdb_id,
