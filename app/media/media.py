@@ -742,6 +742,7 @@ class Media:
         tmdb_id = self.config.get_tmdb_id_mapping(title)
         if tmdb_id:
             media_type, tmdb_id = tmdb_id
+            media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
             file_media_info = self.get_tmdb_info(mtype=media_type,
                                                      tmdbid=tmdb_id,
                                                      chinese=chinese,
@@ -939,6 +940,7 @@ class Media:
                     tmdb_id = self.config.get_tmdb_id_mapping(meta_info.get_name())
                     if tmdb_id:
                         media_type, tmdb_id = tmdb_id
+                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
                         file_media_info = self.get_tmdb_info(mtype=media_type,
                                                              tmdbid=tmdb_id,
                                                              chinese=chinese,

@@ -4,7 +4,6 @@ import sys
 from threading import Lock
 import ruamel.yaml
 import re
-from app.utils.types import MediaType
 
 # 种子名/文件名要素分隔字符
 SPLIT_CHARS = r"\.|\s+|\(|\)|\[|]|-|\+|【|】|/|～|;|&|\||#|_|「|」|~"
@@ -199,13 +198,11 @@ class Config(object):
                     if line.startswith("r:"):
                         is_regex, video_name, media_type, tmdb_id = line.split(":")
                         media_type = media_type.strip().lower()
-                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
                         self._r_tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
                     else:
                         # 普通规则使用简单的split
                         video_name, media_type, tmdb_id = line.split(":")
                         media_type = media_type.strip().lower()
-                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
                         self._tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
                 self._tmdb_id_mapping_mtime = os.path.getatime(mapping_config_file)
             except Exception as e:
