@@ -139,10 +139,10 @@ class DoubanApi(object):
     }
 
     _user_agents = [
-        "api-client/1 com.douban.frodo/7.22.0.beta9(231) Android/23 product/Mate 40 vendor/HUAWEI model/Mate 40 brand/HUAWEI  rom/android  network/wifi  platform/AndroidPad"
-        "api-client/1 com.douban.frodo/7.18.0(230) Android/22 product/MI 9 vendor/Xiaomi model/MI 9 brand/Android  rom/miui6  network/wifi  platform/mobile nd/1",
-        "api-client/1 com.douban.frodo/7.1.0(205) Android/29 product/perseus vendor/Xiaomi model/Mi MIX 3  rom/miui6  network/wifi  platform/mobile nd/1",
-        "api-client/1 com.douban.frodo/7.3.0(207) Android/22 product/MI 9 vendor/Xiaomi model/MI 9 brand/Android  rom/miui6  network/wifi platform/mobile nd/1"]
+        "User-Agent: MicroMessenger/",
+        "User-Agent: MicroMessenger/",
+        "User-Agent: MicroMessenger/"]
+    _referer = 'https://servicewechat.com/wx2f9b06c1de1ccfca/91/page-frame.html'
     _api_secret_key = "bf7dddc7c9cfe6f7"
     _api_key = "0dad551ec0f84ed02907ff5c42e8ec70"
     _base_url = "https://frodo.douban.com/api/v2"
@@ -168,9 +168,10 @@ class DoubanApi(object):
             params.update(kwargs)
 
         ts = params.pop('_ts', int(datetime.strftime(datetime.now(), '%Y%m%d')))
-        params.update({'os_rom': 'android', 'apiKey': cls._api_key, '_ts': ts, '_sig': cls.__sign(url=req_url, ts=ts)})
+        #params.update({'os_rom': 'android', 'apiKey': cls._api_key, '_ts': ts, '_sig': cls.__sign(url=req_url, ts=ts)})
 
-        headers = {'User-Agent': choice(cls._user_agents)}
+        headers = {'User-Agent': choice(cls._user_agents),
+                    'Referer': cls._referer}
         resp = RequestUtils(headers=headers, session=cls._session).get_res(url=req_url, params=params)
 
         return resp.json() if resp else {}
