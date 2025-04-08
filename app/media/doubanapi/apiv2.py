@@ -144,7 +144,7 @@ class DoubanApi(object):
         "User-Agent: MicroMessenger/"]
     _referer = 'https://servicewechat.com/wx2f9b06c1de1ccfca/91/page-frame.html'
     _api_secret_key = "bf7dddc7c9cfe6f7"
-    _api_key = "0dad551ec0f84ed02907ff5c42e8ec70"
+    _api_key = "0ac44ae016490db2204ce0a042db2916"
     _base_url = "https://frodo.douban.com/api/v2"
     _session = requests.Session()
 
