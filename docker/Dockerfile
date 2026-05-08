@@ -11,9 +11,10 @@ RUN apk add --no-cache --virtual .build-deps \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
     && chmod +x /usr/bin/mc \
-    && pip install --upgrade pip setuptools wheel \
-    && pip install cython \
-    && pip install -r https://raw.githubusercontent.com/alpha-86/nas-tools/master/requirements.txt \
+    && pip install --upgrade pip wheel --break-system-packages \
+    && pip install "setuptools<81" --break-system-packages \
+    && pip install cython --break-system-packages \
+    && pip install -r https://raw.githubusercontent.com/alpha-86/nas-tools/master/requirements.txt --break-system-packages --no-build-isolation \
     && apk del --purge .build-deps \
     && rm -rf /tmp/* /root/.cache /var/cache/apk/*
 COPY --chmod=755 ./docker/rootfs /
@@ -49,9 +50,7 @@ RUN addgroup -S nt -g 911 \
     && echo 'fs.inotify.max_user_watches=5242880' >> /etc/sysctl.conf \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
     && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
-    && cd third_party  \
-    && git submodule init  \
-    && git submodule update
+    && if [ -d third_party ]; then cd third_party && git submodule init && git submodule update; fi
 EXPOSE 3000
 VOLUME ["/config"]
 ENTRYPOINT [ "/init" ]
