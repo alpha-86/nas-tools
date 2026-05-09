@@ -296,8 +296,8 @@ class User(UserMixin):
         }
 
     def get_indexer(self, url, siteid=None, cookie=None, ua=None,
-                    name=None, rule=None, pri=False, public=False,
-                    proxy=False, render=False):
+                    name=None, rule=None, pri=None, public=None,
+                    proxy=None, render=None):
         """
         获取索引器配置（委托 SiteConfigManager）
         """
@@ -420,8 +420,8 @@ class SiteConfigManager:
         return result
 
     def get_indexer_conf(self, url, siteid=None, cookie=None, ua=None,
-                         name=None, rule=None, pri=False, public=False,
-                         proxy=False, render=False):
+                         name=None, rule=None, pri=None, public=None,
+                         proxy=None, render=None):
         """根据 URL 查找站点配置并构造 IndexerConf
 
         运行时传入参数优先，_sites_data 中的静态配置做补全。
@@ -432,20 +432,20 @@ class SiteConfigManager:
         if site_data:
             search = site_data.get("search", False)
             batch = search.get("batch", {}) if isinstance(search, dict) else {}
-            # 运行时参数优先，不覆盖
+            # 运行时参数优先，显式 False 不应被站点配置的 True 覆盖
             indexer = IndexerConf(
                 id=siteid or site_data.get("id", ""),
                 name=name or site_data.get("name", ""),
                 url=url,
                 domain=site_data.get("domain", ""),
                 search=search,
-                proxy=proxy if proxy else site_data.get("proxy", False),
-                render=render if render else site_data.get("render", False),
+                proxy=proxy if proxy is not None else site_data.get("proxy", False),
+                render=render if render is not None else site_data.get("render", False),
                 cookie=cookie or "",
                 ua=ua or "",
                 rule=rule,
-                pri=pri if pri else (site_data.get("public", False) is False),
-                public=public if public else site_data.get("public", False),
+                pri=pri if pri is not None else (site_data.get("public", False) is False),
+                public=public if public is not None else site_data.get("public", False),
                 builtin=True,
                 category=site_data.get("category"),
                 language=site_data.get("language"),
@@ -459,7 +459,10 @@ class SiteConfigManager:
         return IndexerConf(
             id=siteid or "", name=name or "", url=url,
             cookie=cookie or "", ua=ua or "", rule=rule,
-            pri=pri, public=public, proxy=proxy, render=render
+            pri=pri if pri is not None else False,
+            public=public if public is not None else False,
+            proxy=proxy if proxy is not None else False,
+            render=render if render is not None else False
         )
 
     def __find_site_by_url(self, url):
@@ -484,15 +487,23 @@ class SiteConfigManager:
 
     @staticmethod
     def __css_to_xpath(css_selector):
-        """将简单 CSS 选择器转换为 xpath（仅支持 tag.class 和 tag#id 形式）"""
+        """将简单 CSS 选择器转换为 xpath（支持 tag.class 和 tag#id 形式）"""
         if not css_selector or css_selector == "*":
             return None
-        parts = css_selector.split(".")
-        if len(parts) == 1:
-            return f"//{parts[0]}"
-        tag = parts[0] if parts[0] else "*"
-        classes = ".".join(parts[1:])
-        return f"//{tag}[contains(@class, '{classes}')]"
+        # Handle #id selector: tag#id or #id
+        if "#" in css_selector:
+            parts = css_selector.split("#", 1)
+            tag = parts[0] if parts[0] else "*"
+            id_val = parts[1]
+            return f"//{tag}[@id='{id_val}']"
+        # Handle .class selector: tag.class or .class
+        if "." in css_selector:
+            parts = css_selector.split(".")
+            tag = parts[0] if parts[0] else "*"
+            classes = ".".join(parts[1:])
+            return f"//{tag}[contains(@class, '{classes}')]"
+        # Tag only
+        return f"//{css_selector}"
 
     def get_brush_conf(self):
         """返回刷流配置 {domain_url: brush_config}
