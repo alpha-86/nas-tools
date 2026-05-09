@@ -157,6 +157,7 @@ class MetaBase(object):
         self.org_string = title
         self.subtitle = subtitle
         self.fileflag = fileflag
+        self.raw_name = None
 
     def get_name(self):
         if self.cn_name and StringUtils.is_all_chinese(self.cn_name):

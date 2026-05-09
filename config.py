@@ -1,7 +1,7 @@
 import os
 import shutil
 import sys
-from threading import Lock
+import threading
 import ruamel.yaml
 import re
 
@@ -80,7 +80,7 @@ XVFB_PATH = [
 ]
 
 # 线程锁
-lock = Lock()
+lock = threading.RLock()
 
 # 全局实例
 _CONFIG = None
@@ -158,8 +158,8 @@ class Config(object):
         with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
             try:
                 # 读取配置
-                self._video_name_mapping = ruamel.yaml.YAML().load(cf)
-                self._video_name_mapping_mtime=os.path.getatime(mapping_config_file)
+                self._video_name_mapping = ruamel.yaml.YAML().load(cf) or {}
+                self._video_name_mapping_mtime=os.path.getmtime(mapping_config_file)
             except Exception as e:
                 print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
                 self._video_name_mapping={}
@@ -167,18 +167,59 @@ class Config(object):
 
     def check_and_reload_video_name_mapping(self):
         mapping_config_file = self.get_video_name_mapping_file()
-        now_mtime = os.path.getatime(mapping_config_file)
+        if not os.path.exists(mapping_config_file):
+            self._video_name_mapping = {}
+            self._video_name_mapping_mtime = 0
+            return
+        now_mtime = os.path.getmtime(mapping_config_file)
         if now_mtime > self._video_name_mapping_mtime:
             self.init_video_name_mapping()
-
 
     def get_video_name_mapping(self, name):
         if not name:
             return name
-        self.check_and_reload_video_name_mapping()
-        key_name = name.replace(' ','_').lower()
-        new_name = self._video_name_mapping.get(key_name,name)
-        return new_name
+        with lock:
+            self.check_and_reload_video_name_mapping()
+            key_name = name.replace(' ', '_').lower()
+            return self._video_name_mapping.get(key_name, name)
+
+    def _save_video_name_mapping(self):
+        """内部方法，调用方必须已持有 lock"""
+        mapping_config_file = self.get_video_name_mapping_file()
+        os.makedirs(os.path.dirname(mapping_config_file), exist_ok=True)
+        tmp = mapping_config_file + '.tmp'
+        with open(tmp, mode='w', encoding='utf-8') as sf:
+            ruamel.yaml.YAML().dump(self._video_name_mapping, sf)
+        os.replace(tmp, mapping_config_file)
+        self._video_name_mapping_mtime = os.path.getmtime(mapping_config_file)
+
+    def set_video_name_mapping(self, key, value):
+        if not key or not value:
+            return
+        with lock:
+            self.check_and_reload_video_name_mapping()
+            key_name = key.replace(' ', '_').lower()
+            self._video_name_mapping[key_name] = value
+            self._save_video_name_mapping()
+
+    def delete_video_name_mapping(self, key):
+        if not key:
+            return
+        with lock:
+            self.check_and_reload_video_name_mapping()
+            key_name = key.replace(' ', '_').lower()
+            self._video_name_mapping.pop(key_name, None)
+            self._save_video_name_mapping()
+
+    def list_video_name_mapping(self, name=None):
+        with lock:
+            self.check_and_reload_video_name_mapping()
+            if name:
+                key_name = name.replace(' ', '_').lower()
+                if key_name in self._video_name_mapping:
+                    return {key_name: self._video_name_mapping[key_name]}
+                return {}
+            return dict(self._video_name_mapping)
 
     def init_tmdb_id_mapping(self):
         mapping_config_file = self.get_tmdb_id_mapping_file()
@@ -214,6 +255,11 @@ class Config(object):
 
     def check_and_reload_tmdb_id_mapping(self):
         mapping_config_file = self.get_tmdb_id_mapping_file()
+        if not os.path.exists(mapping_config_file):
+            self._tmdb_id_mapping = {}
+            self._r_tmdb_id_mapping = {}
+            self._tmdb_id_mapping_mtime = 0
+            return
         now_mtime = os.path.getatime(mapping_config_file)
         if now_mtime > self._tmdb_id_mapping_mtime:
             self.init_tmdb_id_mapping()
@@ -298,6 +344,8 @@ class Config(object):
         file_name = self.get_config("app").get("video_name_mapping_file")
         if not file_name:
             file_name = "/config/video_name_mapping.yaml"
+        if not os.path.isabs(file_name):
+            file_name = os.path.join(os.path.dirname(self._config_path), file_name)
         return file_name
 
     def get_tmdb_id_mapping_file(self):
