@@ -371,7 +371,7 @@ function save_name_mapping() {
         if (ret.code === 0) {
             $("#modal-name-mapping").modal('hide');
             show_success_modal(ret.msg, function() {
-                // 自动重新识别当前文件
+                // 关闭成功提示后自动重新识别当前文件
                 mediafile_name_test(filename, "testresults_" + filepos);
             });
         } else {
@@ -390,10 +390,12 @@ function delete_name_mapping() {
     let filepos = $("#name_mapping_filepos_hidden").val();
 
     show_confirm_modal("确定要删除该名称映射吗？", function() {
+        hide_confirm_modal();
         ajax_post("delete_video_name_mapping", {key: raw_name}, function(ret) {
             if (ret.code === 0) {
                 $("#modal-name-mapping").modal('hide');
                 show_success_modal(ret.msg, function() {
+                    // 关闭成功提示后自动重新识别当前文件
                     mediafile_name_test(filename, "testresults_" + filepos);
                 });
             } else {
