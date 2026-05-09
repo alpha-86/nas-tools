@@ -23,7 +23,9 @@ class IndexerConf:
                  cookie="", ua="", token="",
                  order=0, pri=False, rule=None,
                  public=False, builtin=False,
-                 tags=None, category=None):
+                 tags=None, category=None,
+                 language=None, parser=None, batch=None, browse=None,
+                 torrents=None):
         self.id = id
         self.name = name
         self.url = url
@@ -48,6 +50,12 @@ class IndexerConf:
         self.builtin = builtin
         self.tags = tags or []
         self.category = category
+        # Additional fields used by _spider.py / builtin.py
+        self.language = language
+        self.parser = parser
+        self.batch = batch or {}
+        self.browse = browse or {}
+        self.torrents = torrents or {}
 
 
 MENU_CONF = {
@@ -164,6 +172,7 @@ class User(UserMixin):
 
     def __init__(self, user=None):
         self.dbhelper = DbHelper()
+        self._site_config = SiteConfigManager()
         self.id = None
         self.admin = 0
         self.username = None
@@ -241,13 +250,13 @@ class User(UserMixin):
         """
         获取所有管理菜单
         """
-        return SiteConfigManager().get_topmenus()
+        return self._site_config.get_topmenus()
 
     def get_usermenus(self, ignore=None):
         """
         获取用户菜单（委托 SiteConfigManager）
         """
-        return SiteConfigManager().get_menus(ignore=ignore, pris=self.get_pris())
+        return self._site_config.get_menus(ignore=ignore, pris=self.get_pris())
 
     def get_services(self):
         """
@@ -292,7 +301,7 @@ class User(UserMixin):
         """
         获取索引器配置（委托 SiteConfigManager）
         """
-        return SiteConfigManager().get_indexer_conf(
+        return self._site_config.get_indexer_conf(
             url=url, siteid=siteid, cookie=cookie, ua=ua,
             name=name, rule=rule, pri=pri, public=public,
             proxy=proxy, render=render
@@ -302,13 +311,13 @@ class User(UserMixin):
         """
         获取刷流配置（委托 SiteConfigManager）
         """
-        return SiteConfigManager().get_brush_conf()
+        return self._site_config.get_brush_conf()
 
     def get_public_sites(self):
         """
         获取公开站点列表（委托 SiteConfigManager）
         """
-        return SiteConfigManager().get_public_sites()
+        return self._site_config.get_public_sites()
 
 
 class SiteConfigManager:
@@ -329,7 +338,7 @@ class SiteConfigManager:
             with open(bin_path, 'rb') as f:
                 ciphertext = f.read()
             plaintext = self.__decrypt(ciphertext)
-            self._sites_data = json.loads(plaintext)
+            self._sites_data = self.__load_sites_data(plaintext)
         except Exception as e:
             print(f"[SiteConfigManager] Failed to load sites config: {e}")
             self._sites_data = {}
@@ -337,42 +346,35 @@ class SiteConfigManager:
     def __decrypt(self, ciphertext):
         """Fernet 解密
 
-        Fernet key derivation from AES key "0f941adc1ca38b0d":
-        Try these approaches in order:
-        1. SHA-256 of hex bytes, then base64-urlsafe encode
-        2. Direct hex-to-bytes then pad to 32
-        3. UTF-8 encoding then pad to 32
+        The Fernet key was extracted from the compiled .so binary
+        (string analysis found: LB_uTK_lJ4KUb5EKMjOVohDwNZjA8ALRQSxBgbxYJME=).
         """
-        aes_key = "0f941adc1ca38b0d"
+        fernet_key = b"LB_uTK_lJ4KUb5EKMjOVohDwNZjA8ALRQSxBgbxYJME="
+        f = Fernet(fernet_key)
+        return f.decrypt(ciphertext)
 
-        # Try 1: SHA-256 of hex bytes (most likely)
-        try:
-            key_bytes = hashlib.sha256(bytes.fromhex(aes_key)).digest()
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-            return f.decrypt(ciphertext).decode('utf-8')
-        except Exception:
-            pass
+    @staticmethod
+    def __load_sites_data(plaintext):
+        """将解密后的数据转换为可 JSON 序列化的 dict"""
+        import pickle
+        data = pickle.loads(plaintext)
+        # Convert ruamel.yaml CommentedMap/CommentedSeq to plain dict/list
+        return SiteConfigManager.__yaml_to_dict(data)
 
-        # Try 2: direct hex-to-bytes padded to 32
-        try:
-            key_bytes = bytes.fromhex(aes_key).ljust(32, b'\0')
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-            return f.decrypt(ciphertext).decode('utf-8')
-        except Exception:
-            pass
-
-        # Try 3: UTF-8 encoding padded to 32
-        try:
-            key_bytes = aes_key.encode('utf-8').ljust(32, b'\0')
-            fernet_key = base64.urlsafe_b64encode(key_bytes)
-            f = Fernet(fernet_key)
-            return f.decrypt(ciphertext).decode('utf-8')
-        except Exception:
-            pass
-
-        raise ValueError("Failed to decrypt user.sites.bin with any known key derivation")
+    @staticmethod
+    def __yaml_to_dict(obj):
+        """递归转换 ruamel.yaml 对象为标准 Python 类型"""
+        from ruamel.yaml.comments import CommentedMap, CommentedSeq
+        if isinstance(obj, CommentedMap):
+            return {k: SiteConfigManager.__yaml_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, CommentedSeq):
+            return [SiteConfigManager.__yaml_to_dict(v) for v in obj]
+        elif isinstance(obj, dict):
+            return {k: SiteConfigManager.__yaml_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [SiteConfigManager.__yaml_to_dict(v) for v in obj]
+        else:
+            return obj
 
     def get_topmenus(self):
         """返回可分配的权限名称列表"""
@@ -414,34 +416,129 @@ class SiteConfigManager:
                          proxy=False, render=False):
         """根据 URL 查找站点配置并构造 IndexerConf
 
-        Called from app/indexer/client/builtin.py with these parameters.
+        优先从 _sites_data 中查找匹配站点，合并入参与站点配置。
         """
-        indexer = IndexerConf(
-            id=siteid or "",
-            name=name or "",
-            url=url,
-            cookie=cookie or "",
-            ua=ua or "",
-            rule=rule,
-            pri=pri,
-            public=public,
-            proxy=proxy,
-            render=render
+        site_data = self.__find_site_by_url(url)
+        if site_data:
+            search = site_data.get("search", False)
+            batch = search.get("batch", {}) if isinstance(search, dict) else {}
+            indexer = IndexerConf(
+                id=site_data.get("id", siteid or ""),
+                name=site_data.get("name", name or ""),
+                url=url,
+                domain=site_data.get("domain", ""),
+                search=search,
+                proxy=site_data.get("proxy", proxy),
+                render=site_data.get("render", render),
+                cookie=cookie or "",
+                ua=ua or "",
+                rule=rule,
+                pri=site_data.get("public", public) is False,
+                public=site_data.get("public", public),
+                builtin=True,
+                category=site_data.get("category"),
+                language=site_data.get("language"),
+                parser=site_data.get("parser"),
+                batch=batch,
+                browse=site_data.get("browse"),
+                torrents=site_data.get("torrents")
+            )
+            return indexer
+        # Fallback: construct from parameters only
+        return IndexerConf(
+            id=siteid or "", name=name or "", url=url,
+            cookie=cookie or "", ua=ua or "", rule=rule,
+            pri=pri, public=public, proxy=proxy, render=render
         )
-        return indexer
+
+    def __find_site_by_url(self, url):
+        """通过 URL 在 _sites_data 中查找站点配置"""
+        if not url or not self._sites_data:
+            return None
+        # Normalize URL (remove trailing slash)
+        url_norm = url.rstrip("/")
+        for site in self._sites_data.values():
+            domain = site.get("domain", "").rstrip("/")
+            if domain and (url_norm.startswith(domain) or domain in url_norm):
+                return site
+        return None
+
+    @staticmethod
+    def __css_to_xpath(css_selector):
+        """将简单 CSS 选择器转换为 xpath（仅支持 tag.class 和 tag#id 形式）"""
+        if not css_selector or css_selector == "*":
+            return None
+        parts = css_selector.split(".")
+        if len(parts) == 1:
+            return f"//{parts[0]}"
+        tag = parts[0] if parts[0] else "*"
+        classes = ".".join(parts[1:])
+        return f"//{tag}[contains(@class, '{classes}')]"
 
     def get_brush_conf(self):
-        """返回刷流配置 {url: xpath_config}
+        """返回刷流配置 {domain_url: brush_config}
 
-        Called from app/sites/siteconf.py.
+        从 _sites_data 的 torrents.fields 中提取 FREE/2XFREE/HR 信息，
+        转换为 xpath 格式返回。
         """
-        # TODO: Extract brush config from self._sites_data after decryption
-        return {}
+        brush_conf = {}
+        for site in self._sites_data.values():
+            domain = site.get("domain", "").rstrip("/")
+            if not domain:
+                continue
+            fields = site.get("torrents", {}).get("fields", {})
+            dvf = fields.get("downloadvolumefactor", {})
+            uvf = fields.get("uploadvolumefactor", {})
+
+            free_xpaths = []
+            twofree_xpaths = []
+            hr_xpaths = []
+
+            # Extract FREE css selectors (dvf value == 0)
+            if isinstance(dvf, dict) and "case" in dvf:
+                for sel, val in dvf["case"].items():
+                    if val == 0 and sel != "*":
+                        xp = self.__css_to_xpath(sel)
+                        if xp:
+                            free_xpaths.append(xp)
+
+            # Extract 2XFREE: selectors where dvf == 0 AND uvf == 2
+            if isinstance(uvf, dict) and "case" in uvf:
+                for sel, val in uvf["case"].items():
+                    if val == 2 and sel != "*":
+                        xp = self.__css_to_xpath(sel)
+                        if xp:
+                            twofree_xpaths.append(xp)
+
+            # Extract HR (very limited support from data)
+            if "hr_days" in fields:
+                hr_xpaths.append("//span[contains(text(),'H&R')]")
+                hr_xpaths.append("//img[contains(@title,'H&R')]")
+
+            brush_entry = {}
+            if free_xpaths:
+                brush_entry["FREE"] = free_xpaths
+            if twofree_xpaths:
+                brush_entry["2XFREE"] = twofree_xpaths
+            if hr_xpaths:
+                brush_entry["HR"] = hr_xpaths
+            if site.get("render"):
+                brush_entry["RENDER"] = True
+
+            if brush_entry:
+                brush_conf[domain] = brush_entry
+
+        return brush_conf
 
     def get_public_sites(self):
         """返回公开站点 URL 列表
 
         Called from app/indexer/client/builtin.py.
         """
-        # TODO: Extract public sites from self._sites_data after decryption
-        return []
+        public_sites = []
+        for site_conf in self._sites_data.values():
+            if site_conf.get("public", False):
+                domain = site_conf.get("domain", "")
+                if domain:
+                    public_sites.append(domain)
+        return public_sites
