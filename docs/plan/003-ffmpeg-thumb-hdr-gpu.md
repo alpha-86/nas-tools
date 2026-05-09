@@ -55,7 +55,7 @@ get_thumb_image_from_video(video_path, image_path, frames)
     ├─ 1. ffprobe 检测视频 HDR 类型
     │      ├─ HDR10/PQ → 2a: PQ tone-mapping 路径
     │      ├─ HLG      → 2a: HLG tone-mapping 路径
-    │      ├─ DV       → 2a: DV tone-mapping 路径（剥离 RPU 后按 PQ 处理）
+    │      ├─ DV       → 2a: DV tone-mapping 路径（RPU 通常被忽略，按 PQ 处理）
     │      ├─ 未知/检测失败 → 2c: degraded 模式（记录 warning）
     │      └─ SDR      → 2b: SDR 路径
     │
@@ -742,6 +742,20 @@ def _build_hdr_gpu_cmd(video_path, image_path, frames, gpu_type, tonemap_filter,
             "-f", "image2", "-y", image_path
         ]
     return None
+
+@staticmethod
+def _gen_thumb_sdr_cpu(video_path, image_path, frames):
+    """SDR CPU 截图：构建命令 → 执行 → 返回结果"""
+    cmd = FfmpegHelper._build_sdr_cpu_cmd(video_path, image_path, frames)
+    success, _ = FfmpegHelper._run_ffmpeg(cmd)
+    return success
+
+@staticmethod
+def _gen_thumb_hdr_cpu(video_path, image_path, frames, tonemap_filter):
+    """HDR CPU 截图：构建命令 → 执行 → 返回结果"""
+    cmd = FfmpegHelper._build_hdr_cpu_cmd(video_path, image_path, frames, tonemap_filter)
+    success, _ = FfmpegHelper._run_ffmpeg(cmd)
+    return success
 ```
 
 #### 3.1.9 保留现有方法（兼容）
