@@ -1,6 +1,6 @@
-# Plan 004: Docker 镜像升级 — Alpine 3.21 + Python 3.12 + 依赖全面更新
+# Plan 004: Docker 镜像升级 — Alpine latest + Python 3.12 + Edge ffmpeg 8.1.1 + 依赖全面更新
 
-> 目标：将 Docker 基础镜像升级到较新稳定版，明确使用 Python 3.12，系统包和 pip 依赖尽可能升级到最新版。同时与 Plan 003（alpine:edge + ffmpeg 8.1.1）协调，避免冲突。
+> 目标：将 Docker 基础镜像升级到 `alpine:latest`（当前指向 3.21），使用 Python 3.12，ffmpeg 及 VAAPI 驱动从 edge 仓库升级到 8.1.1，pip 依赖按安全策略升级。
 
 ---
 
@@ -21,10 +21,9 @@ COPY --from=Builder / /
 ```
 
 **问题**：
-- `alpine:latest` 指向版本不固定，构建不可复现
-- Python 版本未明确指定，依赖 alpine 仓库的默认 `python3` 包
-- `requirements.txt` 中大量依赖版本锁定（`==`），很多已过时
-- `--break-system-packages` 是 alpine pip 的权宜之计，镜像应使用虚拟环境
+- `pip install --break-system-packages` 是权宜之计，应使用虚拟环境
+- `requirements.txt` 中大量依赖版本锁定（`==`），很多已过时且有安全漏洞
+- ffmpeg 从默认仓库安装，版本较旧（当前 latest 的 ffmpeg 6.1.2）
 
 ### 1.2 当前依赖版本
 
@@ -54,88 +53,59 @@ COPY --from=Builder / /
 
 > 代码中使用 `openai.api_key = ...`（0.x 风格），升级到 1.x 需重写 `app/helper/openai_helper.py`。
 
-### 1.3 Alpine 版本映射
+---
 
-| Alpine 版本 | Python 版本 | ffmpeg 版本 | 状态 |
-|---|---|---|---|
-| 3.19/3.20 | 3.11 | ~6.0 | 旧 |
-| **3.21** (当前 latest) | **3.12.13** | **6.1.2** | **目标** |
-| edge | 3.14.3 | 8.1.1 | 003 所需 |
+## 二、方案
 
-**核心冲突**：Plan 003 要求 `alpine:edge`（ffmpeg 8.1.1 + zscale/tonemap），Plan 004 要求 Python 3.12。但 edge 的 Python 是 3.14，不是 3.12。
+### 2.1 架构
+
+```
+FROM alpine:latest AS Builder
+  ├── apk add python3 py3-pip  (来自 latest 仓库 → Python 3.12)
+  ├── apk add ... --repository=edge/community  (ffmpeg 8.1.1 + VAAPI 驱动)
+  ├── python3 -m venv /opt/venv  (替代 --break-system-packages)
+  ├── pip install -r requirements.txt  (到 venv)
+  └── COPY rootfs
+
+FROM scratch AS APP
+  └── COPY --from=Builder / /
+```
+
+**关键点**：
+- `alpine:latest` 当前指向 3.21，提供 Python 3.12.13
+- ffmpeg / intel-media-driver / libva-* 从 **edge 仓库**安装，获取 8.1.1
+- 其余系统包从 latest（3.21）仓库安装
+
+### 2.2 混用 edge 的 ABI 风险控制
+
+ffmpeg 和 VAAPI 驱动是纯用户态库，依赖的 musl/libc 接口稳定。edge 和 3.21 的 musl 差异极小，混用风险可控。
+
+**策略**：
+1. ffmpeg 8.1.1 从 edge 安装，连带依赖（zimg、libdav1d 等）也从 edge 拉取
+2. Python 3.12 及运行时包仅从 latest 安装，不混用 edge
+3. 构建时先安装 latest 的包，再 overlay edge 的 ffmpeg 包
+
+### 2.3 与 Plan 003 的协调
+
+Plan 003 要求 ffmpeg 8.1.1 + zscale/tonemap/hwdownload。本方案通过 edge 仓库满足此需求，003 无需改动。
+
+```
+003 (HDR/GPU)  +  004 (Docker 升级)
+       │              │
+       │              ├─ alpine:latest (Python 3.12, 系统包)
+       │              └─ edge repo (ffmpeg 8.1.1, VAAPI 驱动)
+       │
+       └─ 使用 ffmpeg 8.1.1 的 zscale/tonemap/vaapi
+```
 
 ---
 
-## 二、方案选项
+## 三、具体改动
 
-### 方案 A：alpine 3.21 全稳定版（推荐）
-
-- **基础镜像**：`alpine:3.21`（明确版本，不漂移）
-- **Python**：从 alpine 3.21 仓库安装 `python3`（即 3.12.13）
-- **ffmpeg**：使用 alpine 3.21 自带的 ffmpeg 6.1.2
-- **依赖**：全部从 3.21 仓库安装，**不混用 edge**
-
-**与 003 的协调**：Plan 003 要求 ffmpeg 8.1.1 主要是为了 zscale/tonemap/hwdownload。ffmpeg 6.1.2 已内置 tonemap/hwdownload；zscale 需要 libzimg，需验证 alpine 3.21 的 ffmpeg 包是否编译了此依赖。
-
-**验证路径**：构建后执行 `ffmpeg -filters 2>&1 | grep zscale`，如果存在则 003 和 004 完全兼容，无需 edge。
-
-**优势**：零 ABI 风险，镜像干净，可复现。
-
-**风险**：如果 alpine 3.21 的 ffmpeg 缺少 zscale，003 的 HDR tone-mapping 滤镜链不可用。
-
-### 方案 B：alpine 3.21 + edge ffmpeg（混用）
-
-- **基础镜像**：`alpine:3.21`
-- **Python**：3.12（从 3.21 仓库）
-- **ffmpeg 及 VAAPI 驱动**：从 edge 仓库单独安装
+### 3.1 Dockerfile 重构
 
 ```dockerfile
-# 添加 edge 仓库仅用于 ffmpeg
-RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories \
-    && apk add --no-cache ffmpeg intel-media-driver libva-dev libva-utils zimg \
-       --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
-```
-
-**优势**：既能用 Python 3.12，又能用 ffmpeg 8.1.1，003 功能无损。
-
-**风险**：edge 和 3.21 的 ABI 差异可能导致运行时问题（edge 的 glibc/musl 库版本更新）。
-
-### 方案 C：`python:3.12-alpine3.21` 官方镜像
-
-- **基础镜像**：`python:3.12-alpine3.21`（Docker 官方，已预装 Python 3.12.9+）
-- **不需要**从 alpine 安装 `python3-dev` / `py3-pip`
-- ffmpeg 同方案 A 或 B
-
-**优势**：Python 版本完全明确，不受 alpine 仓库影响；`pip` 已预装，不需要 `--break-system-packages`。
-
-**风险**：官方镜像比 `alpine:3.21` 大 ~50MB；仍需解决 ffmpeg 版本问题。
-
----
-
-## 三、推荐方案
-
-**采用方案 A（alpine 3.21 全稳定版）为主路径，以方案 B 为 fallback。**
-
-```
-1. 先用 alpine:3.21 构建，验证 ffmpeg 6.1.2 的 zscale/tonemap/hwdownload
-   ├─ 全部通过 → 用方案 A，不碰 edge
-   └─ 缺少 zscale 或 tonemap → fallback 到方案 B（3.21 + edge ffmpeg）
-```
-
-**理由**：
-- 003 的核心需求是"zscale/tonemap/hwdownload 可用"，不是"ffmpeg 必须是 8.1.1"
-- ffmpeg 6.1.2 已支持 tonemap/hwdownload；zscale 依赖 libzimg 编译选项，大概率已包含
-- 避免 edge 的滚动更新风险，构建更稳定
-
----
-
-## 四、具体改动
-
-### 4.1 Dockerfile 重构
-
-```dockerfile
-# 明确指定 alpine 版本，避免 latest 漂移
-FROM alpine:3.21 AS Builder
+FROM alpine:latest AS Builder
 
 # 构建依赖（编译 Python 包所需）
 RUN apk add --no-cache --virtual .build-deps \
@@ -146,19 +116,26 @@ RUN apk add --no-cache --virtual .build-deps \
         libxslt-dev \
         linux-headers
 
-# 运行时依赖（从 package_list.txt + python3）
+# 运行时依赖（从 latest 仓库）
 RUN apk add --no-cache \
         python3 \
         py3-pip \
         git tzdata zip curl bash fuse3 xvfb \
         inotify-tools chromium-chromedriver \
-        s6-overlay ffmpeg redis wget shadow sudo \
-        intel-media-driver libva-dev libva-utils \
+        s6-overlay redis wget shadow sudo \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && curl https://rclone.org/install.sh | bash \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
     && chmod +x /usr/bin/mc
+
+# ffmpeg 及 VAAPI 驱动从 edge 仓库安装（8.1.1）
+RUN apk add --no-cache \
+        ffmpeg \
+        intel-media-driver \
+        libva-dev \
+        libva-utils \
+        --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
 
 # 使用 Python 虚拟环境，避免 --break-system-packages
 RUN python3 -m venv /opt/venv
@@ -205,7 +182,8 @@ WORKDIR ${WORKDIR}
 
 RUN addgroup -S nt -g 911 \
     && adduser -S nt -G nt -h ${HOME} -s /bin/bash -u 911 \
-    && echo "${WORKDIR}/" > /opt/venv/lib/python3.12/site-packages/nas-tools.pth \
+    && python_ver=$(python3 -V | awk '{print $2}') \
+    && echo "${WORKDIR}/" > /opt/venv/lib/python${python_ver%.*}/site-packages/nas-tools.pth \
     && echo 'fs.inotify.max_user_watches=5242880' >> /etc/sysctl.conf \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
     && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
@@ -217,17 +195,15 @@ ENTRYPOINT ["/init"]
 ```
 
 **关键变更**：
-1. `FROM alpine:latest` → `FROM alpine:3.21`（版本固定）
-2. 显式安装 `python3` 和 `py3-pip`（alpine 3.21 提供 Python 3.12.13）
-3. 新增 `python3 -m venv /opt/venv` — 虚拟环境替代 `--break-system-packages`
+1. `FROM alpine:latest` 保留（用户要求不固定版本）
+2. 新增 `python3 -m venv /opt/venv` — 虚拟环境替代 `--break-system-packages`
+3. ffmpeg 及 VAAPI 驱动从 edge 仓库单独安装
 4. 更新 `PATH` 包含 `/opt/venv/bin`
-5. `.pth` 路径改为 `/opt/venv/lib/python3.12/...`
+5. `.pth` 路径用 `python${python_ver%.*}` 动态计算（兼容不同 Python 次版本）
 
-### 4.2 package_list.txt 调整
+### 3.2 package_list.txt 调整
 
-当前 `package_list.txt` 中的 `python3-dev` 和 `py3-pip` 在 Dockerfile 中改为显式安装（因为需要放在 `.build-deps` 之外）。
-
-如果保留 `package_list.txt` 作为运行时自动更新源，需要移除 `python3-dev`（纯开发包，运行时不需要）：
+将 `ffmpeg`、`intel-media-driver`、`libva-dev`、`libva-utils` 从 `package_list.txt` 中移除（改为在 Dockerfile 中从 edge 安装），避免 010-update 脚本从 latest 仓库重复安装旧版 ffmpeg。
 
 ```diff
 # package_list.txt
@@ -238,12 +214,26 @@ git
 +py3-pip
  tzdata
  zip
- ...
+ curl
+ bash
+ fuse3
+ xvfb
+ inotify-tools
+ chromium-chromedriver
+ s6-overlay
+-ffmpeg
+ redis
+ wget
+ shadow
+ sudo
+-intel-media-driver
+-libva-dev
+-libva-utils
 ```
 
-或者保持 `package_list.txt` 不变，在 Dockerfile 中额外显式安装 `python3 py3-pip`。
+> 注：`python3-dev` 改为 `python3`（运行时不需要 dev 包），ffmpeg 和 VAAPI 驱动从 edge 安装不在 package_list.txt 中。
 
-### 4.3 requirements.txt 升级策略
+### 3.3 requirements.txt 升级策略
 
 **策略：分阶段升级，先安全后激进。**
 
@@ -293,9 +283,9 @@ Flask-Login==0.6.2
 | `selenium` | 4.4.3 | 升级到 4.31+，验证 WebDriver 初始化逻辑 |
 | `APScheduler` | 3.10.0 | 升级到 3.11+，验证定时任务调度 |
 
-### 4.4 010-update 脚本适配
+### 3.4 010-update 脚本适配
 
-`docker/rootfs/etc/cont-init.d/010-update` 中的依赖更新逻辑需要适配虚拟环境：
+`docker/rootfs/etc/cont-init.d/010-update` 中的依赖更新逻辑需要适配虚拟环境，并处理 edge 仓库：
 
 ```diff
   function requirements_update {
@@ -308,7 +298,9 @@ Flask-Login==0.6.2
   }
 ```
 
-### 4.5 NAStool 服务脚本适配
+**注意**：010-update 的 `package_update` 函数目前从 `package_list.txt` 安装系统包。由于 ffmpeg 已从 package_list.txt 移除，自动更新时不会覆盖 edge 的 ffmpeg 8.1.1。但如果未来 `package_list.txt` 中重新加入 `ffmpeg`，会从 latest 安装旧版。需确保维护者知晓此约束。
+
+### 3.5 NAStool 服务脚本适配
 
 `docker/rootfs/etc/services.d/NAStool/run` 中的 `python3` 调用需要改为虚拟环境路径：
 
@@ -321,45 +313,45 @@ Flask-Login==0.6.2
 
 ---
 
-## 五、文件变更清单
+## 四、文件变更清单
 
 | 文件 | 变更 | 说明 |
 |------|------|------|
-| `docker/Dockerfile` | 重构 | `alpine:latest` → `alpine:3.21`；新增 Python 3.12 虚拟环境 `/opt/venv`；移除 `--break-system-packages`；更新 PATH 和 .pth 路径 |
-| `package_list.txt` | 调整 | 将 `python3-dev` 改为 `python3`（运行时不需要 dev 包） |
+| `docker/Dockerfile` | 重构 | 保留 `alpine:latest`；新增 Python 虚拟环境 `/opt/venv`；移除 `--break-system-packages`；ffmpeg/VAAPI 驱动从 edge 安装；更新 PATH 和 .pth 路径 |
+| `package_list.txt` | 移除 ffmpeg/VAAPI | 将 `ffmpeg`、`intel-media-driver`、`libva-dev`、`libva-utils` 移除（改从 edge 安装）；`python3-dev` 改为 `python3` |
 | `requirements.txt` | 部分升级 | 阶段 1 安全升级（cryptography, pillow, requests 等同主版本最新）；阶段 2/3 保持原版本待验证 |
 | `docker/rootfs/etc/services.d/NAStool/run` | 1 行 | `python3` → `/opt/venv/bin/python3` |
 | `docker/rootfs/etc/cont-init.d/010-update` | 2 行 | `pip` → `/opt/venv/bin/pip` |
-| `docs/plan/003-ffmpeg-thumb-hdr-gpu.md` | 协调 | 如果方案 A 验证通过（ffmpeg 6.1.2 支持 zscale），将 003 的 `alpine:edge` 改为 `alpine:3.21` |
 
 ---
 
-## 六、验证方式
+## 五、验证方式
 
-### 6.1 Docker 构建验证
+### 5.1 Docker 构建验证
 
 ```bash
 # 1. 构建镜像
-docker build -t nas-tools:3.21-test -f docker/Dockerfile .
+docker build -t nas-tools:test -f docker/Dockerfile .
 
 # 2. 确认 Python 版本
-docker run --rm nas-tools:3.21-test python3 --version
-# 期望: Python 3.12.13
+docker run --rm nas-tools:test python3 --version
+# 期望: Python 3.12.x
 
 # 3. 确认 ffmpeg 版本及关键滤镜
-docker run --rm nas-tools:3.21-test ffmpeg -version | head -1
-docker run --rm nas-tools:3.21-test ffmpeg -filters 2>&1 | grep -E "zscale|tonemap|hwdownload"
-# 期望: 三条都输出非空（如为空，fallback 到方案 B）
+docker run --rm nas-tools:test ffmpeg -version | head -1
+# 期望: ffmpeg version 8.1.x
+docker run --rm nas-tools:test ffmpeg -filters 2>&1 | grep -E "zscale|tonemap|hwdownload"
+# 期望: 三条都输出非空
 
 # 4. 确认虚拟环境
-docker run --rm nas-tools:3.21-test which python3
+docker run --rm nas-tools:test which python3
 # 期望: /opt/venv/bin/python3
 
 # 5. 确认 pip 包安装成功
-docker run --rm nas-tools:3.21-test pip list | grep -E "Flask|SQLAlchemy|requests"
+docker run --rm nas-tools:test pip list | grep -E "Flask|SQLAlchemy|requests"
 ```
 
-### 6.2 运行时功能验证
+### 5.2 运行时功能验证
 
 | # | 验证项 | 方法 |
 |---|---|---|
@@ -367,44 +359,28 @@ docker run --rm nas-tools:3.21-test pip list | grep -E "Flask|SQLAlchemy|request
 | 2 | WEB 登录 | 访问 `http://IP:3000`，验证登录正常 |
 | 3 | 文件整理识别 | 上传/整理一个视频文件，验证识别流程 |
 | 4 | 定时任务 | 验证 RSS、订阅等定时任务正常触发 |
-| 5 | ffmpeg 截图 | 用 Plan 003 的测试文件验证 thumb 生成（如果 003 已完成） |
+| 5 | ffmpeg 截图 | 用 Plan 003 的测试文件验证 thumb 生成 |
 | 6 | 自动更新脚本 | 修改 requirements.txt 后重启容器，验证 010-update 正确重装依赖 |
-
-### 6.3 依赖兼容性验证
-
-```bash
-# 在容器内运行 pip check，查找版本冲突
-pip check
-
-# 扫描已知安全漏洞
-pip install pip-audit
-pip-audit
-```
+| 7 | VAAPI GPU | `ffmpeg -hwaccels` 输出包含 vaapi |
 
 ---
 
-## 七、003/004 协调清单
+## 六、风险与注意事项
 
-| Plan 003 需求 | 在 004 方案 A 中的满足情况 | 验证项 |
-|---|---|---|
-| ffmpeg >= 6.0 | alpine 3.21 自带 ffmpeg 6.1.2 | `ffmpeg -version` |
-| zscale 滤镜 | 依赖 alpine 编译选项，需验证 | `ffmpeg -filters \| grep zscale` |
-| tonemap 滤镜 | ffmpeg 6.1.2 内置 | `ffmpeg -filters \| grep tonemap` |
-| hwdownload 滤镜 | ffmpeg 6.1.2 VAAPI 支持 | `ffmpeg -filters \| grep hwdownload` |
-| vaapi 硬件加速 | `intel-media-driver` + `libva` 从 3.21 安装 | `ffmpeg -hwaccels \| grep vaapi` |
+1. **`alpine:latest` 滚动风险**：latest 会随 alpine 新版本发布而漂移（未来可能从 3.21 到 3.22、3.23）。Python 版本可能从 3.12 变为 3.13 或 3.14，需要代码兼容。当前代码在 Python 3.12 上运行正常，但 3.13+ 的语法/API 变更需要持续验证。
 
-**如果上述验证全部通过**：Plan 003 的 `alpine:edge` 建议同步改为 `alpine:3.21`，两个计划完全兼容。
+2. **edge 仓库滚动风险**：edge 是滚动更新，ffmpeg 8.1.1 可能在某次构建时变为 8.2.x 或 9.0。API 兼容性通常保持向后兼容，但构建不可复现。如需锁定，可用 `apk add ffmpeg=8.1.1-r0 --repository=edge/community`，但 edge 包可能随时被移除旧版本。
 
-**如果 zscale 缺失**：Plan 004 采用方案 B（3.21 + edge ffmpeg），Plan 003 保持 edge，两个计划通过混用协调。
+3. **混用 ABI 风险**：edge 的 ffmpeg 8.1.1 依赖的库（zimg、libdav1d 等）版本可能高于 latest 仓库的其他包。实测中尚未发现 musl 不兼容，但如遇 segfault 需排查依赖版本。
 
----
+4. **`--break-system-packages` 移除**：使用虚拟环境后不再需要此标志。010-update 和 Dockerfile 中的 pip 命令都需要指向 `/opt/venv/bin/pip`。
 
-## 八、风险与注意事项
+5. **Flask 2→3 升级**：Flask 3 移除 `session_cookie_name` 等旧属性，移除 `app.json_encoder`。当前代码未使用这些特性，但建议验证后再升级。
 
-1. **Python 虚拟环境路径**：`/opt/venv` 是硬编码路径。如果未来需要支持多 Python 版本，可改为 `/opt/venv-py312`。
-2. **`--break-system-packages` 移除**：使用虚拟环境后不再需要此标志。但 010-update 脚本中的 `pip install` 也需要指向虚拟环境 pip。
-3. **Flask 2→3 升级**：Flask 3 移除 `session_cookie_name` 等旧属性，移除 `app.json_encoder`。当前代码未使用这些特性，但建议验证后再升级。
-4. **openai 0→1 升级**：openai 1.x 是全新 API（`openai.OpenAI()` 客户端模式），`openai_helper.py` 需要完全重写。建议作为独立任务处理，不在 004 范围内升级 openai 包。
-5. **alpine 3.21 的 Chromium**：`chromium-chromedriver` 包在 alpine 中可能版本较新，需验证与 `undetected-chromedriver` 的兼容性。
-6. **构建缓存**：明确指定 `alpine:3.21` 后，Docker 构建缓存更稳定；但首次构建会拉取新的基础镜像层。
-7. **镜像大小**：虚拟环境 `/opt/venv` 会增加 ~100-200MB 镜像大小（所有 pip 包安装在 venv 而非系统 site-packages）。可通过多阶段构建优化（将 venv 从 Builder 复制到 APP）。
+6. **openai 0→1 升级**：openai 1.x 是全新 API（`openai.OpenAI()` 客户端模式），`openai_helper.py` 需要完全重写。建议作为独立任务处理，不在 004 范围内升级 openai 包。
+
+7. **alpine 的 Chromium**：`chromium-chromedriver` 包在 alpine 中可能版本较新，需验证与 `undetected-chromedriver` 的兼容性。
+
+8. **镜像大小**：虚拟环境 `/opt/venv` 会增加 ~100-200MB 镜像大小。多阶段构建（`FROM scratch AS APP`）已将 Builder 层的临时文件剥离，venv 本身必须保留在最终镜像中。
+
+9. **010-update 的 ffmpeg 覆盖风险**：如果未来维护者在 `package_list.txt` 中重新加入 `ffmpeg`，010-update 会从 latest 安装旧版 ffmpeg 覆盖 edge 的 8.1.1。建议在 010-update 中保留 edge 仓库配置，或在文档中明确标注 ffmpeg 必须从 edge 安装。
