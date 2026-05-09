@@ -320,14 +320,22 @@ class User(UserMixin):
         return self._site_config.get_public_sites()
 
 
+# 模块级单例：避免频繁 User() 实例化导致重复解密 user.sites.bin
+_site_config_manager_instance = None
+
+
 class SiteConfigManager:
     """
     站点配置管理器（原 .so 中 WlI5bfacg2 的替代实现）
     """
 
-    def __init__(self):
-        self._sites_data = {}
-        self.init_config()
+    def __new__(cls):
+        global _site_config_manager_instance
+        if _site_config_manager_instance is None:
+            _site_config_manager_instance = super().__new__(cls)
+            _site_config_manager_instance._sites_data = {}
+            _site_config_manager_instance.init_config()
+        return _site_config_manager_instance
 
     def init_config(self):
         """加载并解密站点配置"""
@@ -416,25 +424,28 @@ class SiteConfigManager:
                          proxy=False, render=False):
         """根据 URL 查找站点配置并构造 IndexerConf
 
-        优先从 _sites_data 中查找匹配站点，合并入参与站点配置。
+        运行时传入参数优先，_sites_data 中的静态配置做补全。
+        传入参数：cookie, ua, proxy, render, rule, pri, public, name, siteid
+        站点配置：search, parser, language, browse, batch, torrents, category, domain
         """
         site_data = self.__find_site_by_url(url)
         if site_data:
             search = site_data.get("search", False)
             batch = search.get("batch", {}) if isinstance(search, dict) else {}
+            # 运行时参数优先，不覆盖
             indexer = IndexerConf(
-                id=site_data.get("id", siteid or ""),
-                name=site_data.get("name", name or ""),
+                id=siteid or site_data.get("id", ""),
+                name=name or site_data.get("name", ""),
                 url=url,
                 domain=site_data.get("domain", ""),
                 search=search,
-                proxy=site_data.get("proxy", proxy),
-                render=site_data.get("render", render),
+                proxy=proxy if proxy else site_data.get("proxy", False),
+                render=render if render else site_data.get("render", False),
                 cookie=cookie or "",
                 ua=ua or "",
                 rule=rule,
-                pri=site_data.get("public", public) is False,
-                public=site_data.get("public", public),
+                pri=pri if pri else (site_data.get("public", False) is False),
+                public=public if public else site_data.get("public", False),
                 builtin=True,
                 category=site_data.get("category"),
                 language=site_data.get("language"),
@@ -452,14 +463,22 @@ class SiteConfigManager:
         )
 
     def __find_site_by_url(self, url):
-        """通过 URL 在 _sites_data 中查找站点配置"""
+        """通过 URL 在 _sites_data 中查找站点配置
+
+        基于 urlparse 提取 netloc 做精确匹配，避免 query/path 导致的误命中。
+        """
         if not url or not self._sites_data:
             return None
-        # Normalize URL (remove trailing slash)
-        url_norm = url.rstrip("/")
+        url_host = urlparse(url).netloc.lower()
+        if not url_host:
+            return None
         for site in self._sites_data.values():
-            domain = site.get("domain", "").rstrip("/")
-            if domain and (url_norm.startswith(domain) or domain in url_norm):
+            domain = site.get("domain", "")
+            domain_host = urlparse(domain).netloc.lower()
+            if not domain_host:
+                continue
+            # 精确匹配或子域名匹配（如 pt.example.com 匹配 example.com 的站点）
+            if url_host == domain_host or url_host.endswith("." + domain_host):
                 return site
         return None
 
@@ -480,6 +499,10 @@ class SiteConfigManager:
 
         从 _sites_data 的 torrents.fields 中提取 FREE/2XFREE/HR 信息，
         转换为 xpath 格式返回。
+
+        返回的每个 brush_config 始终包含以下 key（值为空列表表示无匹配规则）：
+            FREE, 2XFREE, HR, PEER_COUNT
+        调用方 siteconf.py 会直接遍历这些 key，空列表保证不会因 None 抛 TypeError。
         """
         brush_conf = {}
         for site in self._sites_data.values():
@@ -493,6 +516,7 @@ class SiteConfigManager:
             free_xpaths = []
             twofree_xpaths = []
             hr_xpaths = []
+            peer_count_xpaths = []
 
             # Extract FREE css selectors (dvf value == 0)
             if isinstance(dvf, dict) and "case" in dvf:
@@ -502,7 +526,7 @@ class SiteConfigManager:
                         if xp:
                             free_xpaths.append(xp)
 
-            # Extract 2XFREE: selectors where dvf == 0 AND uvf == 2
+            # Extract 2XFREE: selectors where uvf == 2
             if isinstance(uvf, dict) and "case" in uvf:
                 for sel, val in uvf["case"].items():
                     if val == 2 and sel != "*":
@@ -510,23 +534,24 @@ class SiteConfigManager:
                         if xp:
                             twofree_xpaths.append(xp)
 
-            # Extract HR (very limited support from data)
+            # Extract HR
             if "hr_days" in fields:
                 hr_xpaths.append("//span[contains(text(),'H&R')]")
                 hr_xpaths.append("//img[contains(@title,'H&R')]")
 
-            brush_entry = {}
-            if free_xpaths:
-                brush_entry["FREE"] = free_xpaths
-            if twofree_xpaths:
-                brush_entry["2XFREE"] = twofree_xpaths
-            if hr_xpaths:
-                brush_entry["HR"] = hr_xpaths
+            # PEER_COUNT: 目前数据中没有直接对应的 xpath，留空列表占位
+            # 若将来 sites_data 补充了 peers 相关字段，可在此扩展
+
+            brush_entry = {
+                "FREE": free_xpaths,
+                "2XFREE": twofree_xpaths,
+                "HR": hr_xpaths,
+                "PEER_COUNT": peer_count_xpaths,
+            }
             if site.get("render"):
                 brush_entry["RENDER"] = True
 
-            if brush_entry:
-                brush_conf[domain] = brush_entry
+            brush_conf[domain] = brush_entry
 
         return brush_conf
 
