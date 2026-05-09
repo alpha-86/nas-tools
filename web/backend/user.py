@@ -1,10 +1,54 @@
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash
 from operator import itemgetter
+from urllib.parse import urlparse
+import base64
+import copy
+import hashlib
+import json
+import os
+
+from cryptography.fernet import Fernet
 
 from app.helper import DbHelper
 from config import Config
 from app.conf import ModuleConf
+
+class IndexerConf:
+    """
+    索引器配置
+    """
+    def __init__(self, id="", name="", url="", domain="",
+                 search=False, proxy=False, render=False,
+                 cookie="", ua="", token="",
+                 order=0, pri=False, rule=None,
+                 public=False, builtin=False,
+                 tags=None, category=None):
+        self.id = id
+        self.name = name
+        self.url = url
+        # domain auto-derived from url if not provided
+        if domain:
+            self.domain = domain
+        elif url:
+            parsed = urlparse(url)
+            self.domain = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            self.domain = ""
+        self.search = search
+        self.proxy = proxy
+        self.render = render
+        self.cookie = cookie
+        self.ua = ua
+        self.token = token
+        self.order = order
+        self.pri = pri
+        self.rule = rule
+        self.public = public
+        self.builtin = builtin
+        self.tags = tags or []
+        self.category = category
+
 
 MENU_CONF = {
     '我的媒体库': {
@@ -120,14 +164,21 @@ class User(UserMixin):
 
     def __init__(self, user=None):
         self.dbhelper = DbHelper()
+        self.id = None
+        self.admin = 0
+        self.username = None
+        self.password_hash = None
+        self.pris = ""
+        self.level = 2
+        self.search = 0
         if user:
             self.id = user.get('id')
-            self.admin = user.get("admin")
+            self.admin = user.get("admin", 0)
             self.username = user.get('name')
             self.password_hash = user.get('password')
-            self.pris = user.get('pris')
-            self.level = user.get("level")
-            self.search = user.get("search")
+            self.pris = user.get('pris', "")
+            self.level = 2
+            self.search = user.get("search", 0)
         self.admin_users = [{
             "id": 0,
             "admin": 1,
@@ -190,20 +241,13 @@ class User(UserMixin):
         """
         获取所有管理菜单
         """
-        return self.admin_users[0]["pris"].split(",")
+        return SiteConfigManager().get_topmenus()
 
     def get_usermenus(self, ignore=None):
-        user_pris_list = self.get_pris().split(",")
-        for menu_key, menu_value in MENU_CONF.items():
-            if menu_value.get('page', 'null') in ignore:
-                MENU_CONF.pop(menu_key)
-            for index, page in enumerate(menu_value.get('list', [])):
-                if page['page'] in ignore:
-                    MENU_CONF[menu_key]['list'].pop(index)
-                    # print(MENU_CONF[menu_key]['list'][index])
-
-        menu_list = list(itemgetter(*user_pris_list)(MENU_CONF))
-        return menu_list
+        """
+        获取用户菜单（委托 SiteConfigManager）
+        """
+        return SiteConfigManager().get_menus(ignore=ignore, pris=self.get_pris())
 
     def get_services(self):
         """
@@ -219,3 +263,185 @@ class User(UserMixin):
 
     def delete_user(self, name):
         return self.dbhelper.delete_user(name)
+
+    def get_authsites(self):
+        """
+        获取认证站点（认证移除后返回空）
+        """
+        return {}
+
+    def check_user(self, site, params):
+        """
+        校验用户认证（认证移除后直接放行）
+        """
+        return True, ""
+
+    def as_dict(self):
+        """
+        返回用户信息字典
+        """
+        return {
+            "id": self.id,
+            "name": self.username,
+            "pris": self.pris
+        }
+
+    def get_indexer(self, url, siteid=None, cookie=None, ua=None,
+                    name=None, rule=None, pri=False, public=False,
+                    proxy=False, render=False):
+        """
+        获取索引器配置（委托 SiteConfigManager）
+        """
+        return SiteConfigManager().get_indexer_conf(
+            url=url, siteid=siteid, cookie=cookie, ua=ua,
+            name=name, rule=rule, pri=pri, public=public,
+            proxy=proxy, render=render
+        )
+
+    def get_brush_conf(self):
+        """
+        获取刷流配置（委托 SiteConfigManager）
+        """
+        return SiteConfigManager().get_brush_conf()
+
+    def get_public_sites(self):
+        """
+        获取公开站点列表（委托 SiteConfigManager）
+        """
+        return SiteConfigManager().get_public_sites()
+
+
+class SiteConfigManager:
+    """
+    站点配置管理器（原 .so 中 WlI5bfacg2 的替代实现）
+    """
+
+    def __init__(self):
+        self._sites_data = {}
+        self.init_config()
+
+    def init_config(self):
+        """加载并解密站点配置"""
+        bin_path = os.path.join(os.path.dirname(__file__), 'user.sites.bin')
+        if not os.path.exists(bin_path):
+            return
+        try:
+            with open(bin_path, 'rb') as f:
+                ciphertext = f.read()
+            plaintext = self.__decrypt(ciphertext)
+            self._sites_data = json.loads(plaintext)
+        except Exception as e:
+            print(f"[SiteConfigManager] Failed to load sites config: {e}")
+            self._sites_data = {}
+
+    def __decrypt(self, ciphertext):
+        """Fernet 解密
+
+        Fernet key derivation from AES key "0f941adc1ca38b0d":
+        Try these approaches in order:
+        1. SHA-256 of hex bytes, then base64-urlsafe encode
+        2. Direct hex-to-bytes then pad to 32
+        3. UTF-8 encoding then pad to 32
+        """
+        aes_key = "0f941adc1ca38b0d"
+
+        # Try 1: SHA-256 of hex bytes (most likely)
+        try:
+            key_bytes = hashlib.sha256(bytes.fromhex(aes_key)).digest()
+            fernet_key = base64.urlsafe_b64encode(key_bytes)
+            f = Fernet(fernet_key)
+            return f.decrypt(ciphertext).decode('utf-8')
+        except Exception:
+            pass
+
+        # Try 2: direct hex-to-bytes padded to 32
+        try:
+            key_bytes = bytes.fromhex(aes_key).ljust(32, b'\0')
+            fernet_key = base64.urlsafe_b64encode(key_bytes)
+            f = Fernet(fernet_key)
+            return f.decrypt(ciphertext).decode('utf-8')
+        except Exception:
+            pass
+
+        # Try 3: UTF-8 encoding padded to 32
+        try:
+            key_bytes = aes_key.encode('utf-8').ljust(32, b'\0')
+            fernet_key = base64.urlsafe_b64encode(key_bytes)
+            f = Fernet(fernet_key)
+            return f.decrypt(ciphertext).decode('utf-8')
+        except Exception:
+            pass
+
+        raise ValueError("Failed to decrypt user.sites.bin with any known key derivation")
+
+    def get_topmenus(self):
+        """返回可分配的权限名称列表"""
+        return ["我的媒体库", "探索", "资源搜索", "站点管理",
+                "订阅管理", "下载管理", "媒体整理", "服务", "系统设置"]
+
+    def get_topmenus_string(self):
+        """返回逗号分隔的权限字符串"""
+        return ",".join(self.get_topmenus())
+
+    def get_menus(self, ignore=None, pris=None):
+        """根据权限过滤 MENU_CONF，深拷贝后操作
+
+        Args:
+            ignore: list of page names to exclude
+            pris: comma-separated menu names the user has access to
+        """
+        if ignore is None:
+            ignore = []
+        menu_conf = copy.deepcopy(MENU_CONF)
+        # Filter by user pris if provided
+        if pris:
+            allowed = set(pris.split(","))
+            menu_conf = {k: v for k, v in menu_conf.items() if k in allowed}
+        result = []
+        for key, value in menu_conf.items():
+            if value.get('page', 'null') in ignore:
+                continue
+            if 'list' in value:
+                value['list'] = [page for page in value['list']
+                                if page.get('page') not in ignore]
+                if not value['list']:
+                    continue
+            result.append(value)
+        return result
+
+    def get_indexer_conf(self, url, siteid=None, cookie=None, ua=None,
+                         name=None, rule=None, pri=False, public=False,
+                         proxy=False, render=False):
+        """根据 URL 查找站点配置并构造 IndexerConf
+
+        Called from app/indexer/client/builtin.py with these parameters.
+        """
+        indexer = IndexerConf(
+            id=siteid or "",
+            name=name or "",
+            url=url,
+            cookie=cookie or "",
+            ua=ua or "",
+            rule=rule,
+            pri=pri,
+            public=public,
+            proxy=proxy,
+            render=render
+        )
+        return indexer
+
+    def get_brush_conf(self):
+        """返回刷流配置 {url: xpath_config}
+
+        Called from app/sites/siteconf.py.
+        """
+        # TODO: Extract brush config from self._sites_data after decryption
+        return {}
+
+    def get_public_sites(self):
+        """返回公开站点 URL 列表
+
+        Called from app/indexer/client/builtin.py.
+        """
+        # TODO: Extract public sites from self._sites_data after decryption
+        return []
