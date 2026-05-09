@@ -307,6 +307,7 @@ Flask-Login==0.6.2
 +         /opt/venv/bin/pip install "setuptools<81" -i "${PYPI_MIRROR}"
 +         /opt/venv/bin/pip install cython -i "${PYPI_MIRROR}"
 +         /opt/venv/bin/pip install -r requirements.txt --no-build-isolation -i "${PYPI_MIRROR}"
++         install_status=$?
       else
 -         apk add --no-cache libffi-dev gcc musl-dev libxml2-dev libxslt-dev
 -         pip install --upgrade pip setuptools wheel
@@ -315,10 +316,17 @@ Flask-Login==0.6.2
 +         /opt/venv/bin/pip install "setuptools<81"
 +         /opt/venv/bin/pip install cython
 +         /opt/venv/bin/pip install -r requirements.txt --no-build-isolation
++         install_status=$?
       fi
 +
 +     # 清理构建依赖，避免镜像膨胀
 +     apk del --purge .update-build-deps
++
++     # 检查 pip install 结果（必须在清理后，用保存的状态）
++     if [ "${install_status}" -ne 0 ]; then
++         echo "依赖安装失败，请检查日志"
++         exit 1
++     fi
       ...
   }
 ```
@@ -351,7 +359,7 @@ Flask-Login==0.6.2
 | `package_list.txt` | 移除 ffmpeg/VAAPI | 将 `ffmpeg`、`intel-media-driver`、`libva-dev`、`libva-utils` 移除（改从 edge 安装）；`python3-dev` 改为 `python3` |
 | `requirements.txt` | 部分升级 | 阶段 1 安全升级（cryptography, pillow, requests 等同主版本最新）；阶段 2/3 保持原版本待验证 |
 | `docker/rootfs/etc/services.d/NAStool/run` | 1 行 | `python3` → `/opt/venv/bin/python3` |
-| `docker/rootfs/etc/cont-init.d/010-update` | 2 行 | `pip` → `/opt/venv/bin/pip` |
+| `docker/rootfs/etc/cont-init.d/010-update` | 重写 requirements_update | 虚拟环境 pip 路径 + build-deps 安装/清理 + setuptools<81 pin + cython + --no-build-isolation + install_status 保存 |
 
 ---
 
