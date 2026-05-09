@@ -1,6 +1,6 @@
 # Plan 004: Docker 镜像升级 — Alpine latest + Python 3.12 + Edge ffmpeg 8.1.1 + 依赖全面更新
 
-> 目标：将 Docker 基础镜像升级到 `alpine:latest`（当前指向 3.21），使用 Python 3.12，ffmpeg 及 VAAPI 驱动从 edge 仓库升级到 8.1.1，pip 依赖按安全策略升级。
+> 目标：将 Docker 基础镜像升级到 `alpine:latest`（当前指向 3.23.4），使用 Python 3.12，ffmpeg 及 VAAPI 驱动从 edge 仓库升级到 8.1.1，pip 依赖按安全策略升级。
 
 ---
 
@@ -23,7 +23,7 @@ COPY --from=Builder / /
 **问题**：
 - `pip install --break-system-packages` 是权宜之计，应使用虚拟环境
 - `requirements.txt` 中大量依赖版本锁定（`==`），很多已过时且有安全漏洞
-- ffmpeg 从默认仓库安装，版本较旧（当前 latest 的 ffmpeg 6.1.2）
+- ffmpeg 从默认仓库安装，版本较旧（当前 latest 的 ffmpeg 8.0.1）
 
 ### 1.2 当前依赖版本
 
@@ -72,13 +72,13 @@ FROM scratch AS APP
 ```
 
 **关键点**：
-- `alpine:latest` 当前指向 3.21，提供 Python 3.12.13
+- `alpine:latest` 当前指向 3.23.4，提供 Python 3.12.x
 - ffmpeg / intel-media-driver / libva-* 从 **edge 仓库**安装，获取 8.1.1
-- 其余系统包从 latest（3.21）仓库安装
+- 其余系统包从 latest（3.23）仓库安装
 
 ### 2.2 混用 edge 的 ABI 风险控制
 
-ffmpeg 和 VAAPI 驱动是纯用户态库，依赖的 musl/libc 接口稳定。edge 和 3.21 的 musl 差异极小，混用风险可控。
+ffmpeg 和 VAAPI 驱动是纯用户态库，依赖的 musl/libc 接口稳定。edge 和 3.23 的 musl 差异极小，混用风险可控。
 
 **策略**：
 1. ffmpeg 8.1.1 从 edge 安装，连带依赖（zimg、libdav1d 等）也从 edge 拉取
@@ -107,8 +107,9 @@ Plan 003 要求 ffmpeg 8.1.1 + zscale/tonemap/hwdownload。本方案通过 edge 
 ```dockerfile
 FROM alpine:latest AS Builder
 
-# 构建依赖（编译 Python 包所需）
+# 构建依赖（编译 Python 包所需，含 Python 头文件）
 RUN apk add --no-cache --virtual .build-deps \
+        python3-dev \
         libffi-dev \
         gcc \
         musl-dev \
@@ -142,9 +143,11 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # 升级 pip 工具链，安装依赖
-RUN pip install --upgrade pip wheel setuptools \
+# setuptools<81 保留原有 pin，避免 legacy 依赖不兼容
+RUN pip install --upgrade pip wheel \
+    && pip install "setuptools<81" \
     && pip install cython \
-    && pip install -r https://raw.githubusercontent.com/alpha-86/nas-tools/master/requirements.txt
+    && pip install -r https://raw.githubusercontent.com/alpha-86/nas-tools/master/requirements.txt --no-build-isolation
 
 # 清理
 RUN apk del --purge .build-deps \
@@ -285,20 +288,47 @@ Flask-Login==0.6.2
 
 ### 3.4 010-update 脚本适配
 
-`docker/rootfs/etc/cont-init.d/010-update` 中的依赖更新逻辑需要适配虚拟环境，并处理 edge 仓库：
+`docker/rootfs/etc/cont-init.d/010-update` 中的依赖更新逻辑需要完整适配虚拟环境，镜像构建时的行为（build deps、setuptools pin、cython、--no-build-isolation、清理）在自动更新时也要保持一致：
 
 ```diff
   function requirements_update {
       ...
--     pip install --upgrade pip setuptools wheel
--     pip install -r requirements.txt
-+     /opt/venv/bin/pip install --upgrade pip setuptools wheel
-+     /opt/venv/bin/pip install -r requirements.txt
++     # 安装构建依赖（与 Dockerfile 的 .build-deps 保持一致）
++     apk add --no-cache --virtual .update-build-deps \
++         python3-dev libffi-dev gcc musl-dev \
++         libxml2-dev libxslt-dev linux-headers
++
+      if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
+          package_cn
+-         apk add --no-cache libffi-dev gcc musl-dev libxml2-dev libxslt-dev
+-         pip install --upgrade pip setuptools wheel -i "${PYPI_MIRROR}"
+-         pip install -r requirements.txt -i "${PYPI_MIRROR}"
++         /opt/venv/bin/pip install --upgrade pip wheel -i "${PYPI_MIRROR}"
++         /opt/venv/bin/pip install "setuptools<81" -i "${PYPI_MIRROR}"
++         /opt/venv/bin/pip install cython -i "${PYPI_MIRROR}"
++         /opt/venv/bin/pip install -r requirements.txt --no-build-isolation -i "${PYPI_MIRROR}"
+      else
+-         apk add --no-cache libffi-dev gcc musl-dev libxml2-dev libxslt-dev
+-         pip install --upgrade pip setuptools wheel
+-         pip install -r requirements.txt
++         /opt/venv/bin/pip install --upgrade pip wheel
++         /opt/venv/bin/pip install "setuptools<81"
++         /opt/venv/bin/pip install cython
++         /opt/venv/bin/pip install -r requirements.txt --no-build-isolation
+      fi
++
++     # 清理构建依赖，避免镜像膨胀
++     apk del --purge .update-build-deps
       ...
   }
 ```
 
-**注意**：010-update 的 `package_update` 函数目前从 `package_list.txt` 安装系统包。由于 ffmpeg 已从 package_list.txt 移除，自动更新时不会覆盖 edge 的 ffmpeg 8.1.1。但如果未来 `package_list.txt` 中重新加入 `ffmpeg`，会从 latest 安装旧版。需确保维护者知晓此约束。
+**注意**：
+1. build deps 安装和清理与 Dockerfile 的 `.build-deps` 保持一致（含 `python3-dev`、`linux-headers`）
+2. `setuptools<81` pin 保留，与 Dockerfile 一致
+3. `--no-build-isolation` 保留，某些包需要预装 cython
+4. cython 在 requirements.txt 安装前显式安装
+5. 010-update 的 `package_update` 函数目前从 `package_list.txt` 安装系统包。由于 ffmpeg 已从 package_list.txt 移除，自动更新时不会覆盖 edge 的 ffmpeg 8.1.1。但如果未来 `package_list.txt` 中重新加入 `ffmpeg`，会从 latest 安装旧版。需确保维护者知晓此约束。
 
 ### 3.5 NAStool 服务脚本适配
 
@@ -333,22 +363,22 @@ Flask-Login==0.6.2
 # 1. 构建镜像
 docker build -t nas-tools:test -f docker/Dockerfile .
 
-# 2. 确认 Python 版本
-docker run --rm nas-tools:test python3 --version
+# 2. 确认 Python 版本（覆盖 entrypoint /init）
+docker run --rm --entrypoint python3 nas-tools:test --version
 # 期望: Python 3.12.x
 
 # 3. 确认 ffmpeg 版本及关键滤镜
-docker run --rm nas-tools:test ffmpeg -version | head -1
+docker run --rm --entrypoint ffmpeg nas-tools:test -version | head -1
 # 期望: ffmpeg version 8.1.x
-docker run --rm nas-tools:test ffmpeg -filters 2>&1 | grep -E "zscale|tonemap|hwdownload"
+docker run --rm --entrypoint ffmpeg nas-tools:test -filters 2>&1 | grep -E "zscale|tonemap|hwdownload"
 # 期望: 三条都输出非空
 
 # 4. 确认虚拟环境
-docker run --rm nas-tools:test which python3
+docker run --rm --entrypoint sh nas-tools:test -c "which python3"
 # 期望: /opt/venv/bin/python3
 
 # 5. 确认 pip 包安装成功
-docker run --rm nas-tools:test pip list | grep -E "Flask|SQLAlchemy|requests"
+docker run --rm --entrypoint sh nas-tools:test -c "pip list | grep -E 'Flask|SQLAlchemy|requests'"
 ```
 
 ### 5.2 运行时功能验证
@@ -367,7 +397,7 @@ docker run --rm nas-tools:test pip list | grep -E "Flask|SQLAlchemy|requests"
 
 ## 六、风险与注意事项
 
-1. **`alpine:latest` 滚动风险**：latest 会随 alpine 新版本发布而漂移（未来可能从 3.21 到 3.22、3.23）。Python 版本可能从 3.12 变为 3.13 或 3.14，需要代码兼容。当前代码在 Python 3.12 上运行正常，但 3.13+ 的语法/API 变更需要持续验证。
+1. **`alpine:latest` 滚动风险**：latest 会随 alpine 新版本发布而漂移（当前为 3.23.4，未来可能到 3.24+）。Python 版本可能从 3.12 变为 3.13 或 3.14，需要代码兼容。当前代码在 Python 3.12 上运行正常，但 3.13+ 的语法/API 变更需要持续验证。
 
 2. **edge 仓库滚动风险**：edge 是滚动更新，ffmpeg 8.1.1 可能在某次构建时变为 8.2.x 或 9.0。API 兼容性通常保持向后兼容，但构建不可复现。如需锁定，可用 `apk add ffmpeg=8.1.1-r0 --repository=edge/community`，但 edge 包可能随时被移除旧版本。
 
