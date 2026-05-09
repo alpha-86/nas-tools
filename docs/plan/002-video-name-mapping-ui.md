@@ -24,30 +24,64 @@
 
 **问题**：已有映射时 `name_test` 返回的 `name` 已是映射后值（如"漫长的季节"），而 YAML key 是映射前的清洗后名称（如 "the_long_season"），二者不同导致查/删失败。
 
-**修复**：在 `__fix_name()` 内部、调用 `Config().get_video_name_mapping()` 之前，保存"清洗后、映射前"的名称。
+**修复**：`__fix_name()` 加 `apply_mapping` 参数，在 `MetaVideo.__init__` 中先清洗不映射获取 raw 值，再按 `get_name()` 优先级选择 `raw_name`，确保与最终展示名一一对应。
 
-**`app/media/meta/metavideo.py`** — `__fix_name()` line 159：
+**`app/media/meta/_base.py`** — `MetaBase.__init__` line 159 新增：
 
 ```python
-def __fix_name(self, name):
+self.raw_name = None
+```
+
+**`app/media/meta/metavideo.py`** — `__fix_name()` 加 `apply_mapping` 参数（默认 `True`，向后兼容）：
+
+```python
+def __fix_name(self, name, apply_mapping=True):
     if not name:
         return name
     name = re.sub(r'%s' % self._name_nostring_re, '', name,
                   flags=re.IGNORECASE).strip()
     name = re.sub(r'\s+', ' ', name)
-    # ... 纯数字处理逻辑保持不变 ...
-    # 保存清洗后、映射前的名称（这是实际用于查 YAML 的 source name）
-    if name and not self.raw_name:
-        self.raw_name = name
-    name = Config().get_video_name_mapping(name)
+    if name.isdigit() \
+            and int(name) < 1800 \
+            and not self.year \
+            and not self.begin_season \
+            and not self.resource_pix \
+            and not self.resource_type \
+            and not self.audio_encode \
+            and not self.video_encode:
+        if self.begin_episode is None:
+            self.begin_episode = int(name)
+            name = None
+        elif self.is_in_episode(int(name)) and not self.begin_season:
+            name = None
+    if apply_mapping:
+        name = Config().get_video_name_mapping(name)
     return name
 ```
 
+**`MetaVideo.__init__` line 129-131** 改为：
+
+```python
+# 先清洗不映射，保存原始清洗值
+raw_cn = self.__fix_name(self.cn_name, apply_mapping=False)
+raw_en = self.__fix_name(self.en_name, apply_mapping=False)
+# 再映射（apply_mapping=True 为默认值）
+self.cn_name = self.__fix_name(self.cn_name)
+self.en_name = StringUtils.str_title(self.__fix_name(self.en_name))
+# 按 get_name() 优先级选择 raw_name，确保与最终展示名一致
+# get_name() 逻辑：全中文 cn_name → en_name → 非全中文 cn_name
+if self.cn_name and StringUtils.is_all_chinese(self.cn_name):
+    self.raw_name = raw_cn
+elif self.en_name:
+    self.raw_name = raw_en
+elif self.cn_name:
+    self.raw_name = raw_cn
+```
+
 **说明**：
-- `raw_name` 在 `MetaBase.__init__` 中已初始化为 `None`（`app/media/meta/_base.py:159`）
 - `raw_name` = "清洗后、映射前"的名称 = 实际用于查 YAML 的 source name
-- 用 `if name and not self.raw_name` 是因为 `__fix_name` 对 `cn_name` 和 `en_name` 各调一次，取第一个非空的即可（通常是 `en_name`）
-- 不改动 `__init__` 的调用顺序，零侵入
+- `apply_mapping=False` 时只做清洗（去干扰词、压缩空格、处理纯数字），不查映射
+- `get_name()` 优先级：全中文 `cn_name` → `en_name` → 非全中文 `cn_name`，`raw_name` 按同样优先级选择，避免 cn_name/en_name 混淆
 
 **`web/action.py`** — `mediainfo_dict()` 新增返回字段：
 
@@ -59,9 +93,17 @@ def __fix_name(self, name):
 
 ### 2.2 Config CRUD (`config.py`)
 
-核心原则：**reload → dict 修改 → 原子写入** 在同一个锁内完成，read-modify-write 是一个临界区。
+**锁策略**：所有访问 `_video_name_mapping` 的路径（包括识别流程的读和 UI 写入）都走同一把 `threading.RLock()`（可重入锁）。`check_and_reload` 在锁内被调用时不会死锁。
 
-**`save_video_name_mapping()`** — 内部方法，假设调用方已持锁：
+**模块顶部**：
+
+```python
+import threading
+# 替换原有的 lock = Lock()
+lock = threading.RLock()
+```
+
+**`_save_video_name_mapping()`** — 内部方法，调用方已持锁：
 
 ```python
 def _save_video_name_mapping(self):
@@ -73,6 +115,18 @@ def _save_video_name_mapping(self):
         ruamel.yaml.YAML().dump(self._video_name_mapping, sf)
     os.replace(tmp, mapping_config_file)
     self._video_name_mapping_mtime = os.path.getmtime(mapping_config_file)
+```
+
+**`get_video_name_mapping(name)`** — 识别流程调用，加锁保护：
+
+```python
+def get_video_name_mapping(self, name):
+    if not name:
+        return name
+    with lock:
+        self.check_and_reload_video_name_mapping()
+        key_name = name.replace(' ', '_').lower()
+        return self._video_name_mapping.get(key_name, name)
 ```
 
 **`set_video_name_mapping(key, value)`** — 完整 read-modify-write 在锁内：
@@ -345,8 +399,8 @@ function delete_name_mapping() {
 
 | 文件 | 变更 | 说明 |
 |------|------|------|
-| `app/media/meta/_base.py` | 无需修改 | `self.raw_name = None` 已在 line 159 |
-| `app/media/meta/metavideo.py` | +1 行 | `__fix_name()` 内映射前保存 `self.raw_name` |
+| `app/media/meta/_base.py` | +1 行 | `self.raw_name = None` |
+| `app/media/meta/metavideo.py` | 修 `__fix_name` + `__init__` | `apply_mapping` 参数 + 按 `get_name()` 优先级选 `raw_name` |
 | `config.py` | +4 方法，修 2 方法 | CRUD（锁内 RMW）+ 原子写入 + 文件不存在清空 + getmtime |
 | `web/action.py` | +3 action + 1 字段 | 新端点 + `mediainfo_dict` 返回 `raw_name` |
 | `web/templates/rename/mediafile.html` | +1 按钮 + 1 Modal + JS | 弹窗内自行 name_test，不依赖 chips |
