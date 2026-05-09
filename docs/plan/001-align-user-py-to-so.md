@@ -1,6 +1,6 @@
 # Plan 001: user.py 功能对齐至 .so 版本
 
-> 目标：将 `web/backend/user.py`（基础版）功能补全，使其与 `user.cpython-310-x86_64-linux-gnu.so`（迭代版）行为一致，支持 Python 3.10/3.12 双版本运行。认证系统已确认移除，所有用户视为已认证。
+> 目标：将 `web/backend/user.py`（基础版）功能补全，使其与 `user.cpython-310-x86_64-linux-gnu.so`（迭代版）行为一致，支持 Python 3.10/3.12 双版本运行。认证系统将在本次迭代中完整移除，所有用户视为已认证（level=2）。
 
 ---
 
@@ -55,15 +55,15 @@ IndexerConf（数据类，表示单个索引器配置）
 - **Hash**: `45b0433d77e880c4547905abc000ec08`
 - **Fernet key**: 从 AES key 派生（需逆向确认具体派生方式）
 
-### 1.6 认证系统：已确认移除
+### 1.6 认证系统：确认需要完整移除
 
-原始 .so 包含一套 PT 站点合作认证系统（UUID 注册、向合作站点 API 发送认证请求等），**已确认完整移除**。
+原始 .so 包含一套 PT 站点合作认证系统（UUID 注册、向合作站点 API 发送认证请求等），**本次迭代将完整移除该系统**。
 
 **核心策略：所有用户 `level` 统一设为 2**
 
-通过将 `level` 设为 2，认证相关的 UI 和逻辑自动失效，无需修改模板或 JS 文件：
+通过将 `level` 统一设为 2，认证相关的 UI 和逻辑将自动失效，无需修改模板或 JS 文件：
 
-| 认证组件 | 位置 | `level=2` 时的行为 |
+| 认证组件 | 位置 | `level=2` 时的行为（预期） |
 |---------|------|-------------------|
 | 认证弹窗自动弹出 | `navigation.html:1225` — `{% elif current_user.level == 1 %}` | 条件不满足，不弹出 |
 | 导航栏认证按钮 | `navbar/index.js:162` — `layout_userlevel > 1` | 走 else 分支，显示版本信息而非认证按钮 |
@@ -73,16 +73,19 @@ IndexerConf（数据类，表示单个索引器配置）
 | 基础设置页面 | `setting/basic.html:433,611` — `level >= 2` | 条件满足，显示完整设置 |
 | 启动时认证 | `run.py:107` — `WebAction.auth_user_level()` | 移除此调用 |
 
-**移除的逻辑：**
-- ~~UUID 生成/注册~~
-- ~~合作站点认证请求（13 个 API 端点）~~
-- ~~`__requestauth` / `__get_playload` / `__check_result`~~
-- ~~`get_auth_level`~~
-- ~~`__register_uuid`~~
+**将要移除的逻辑（不实现）：**
+- UUID 生成/注册（`__random_uuid`、`__register_uuid`）
+- 合作站点认证请求（13 个 API 端点，见附录 C）
+- `__requestauth` / `__get_playload` / `__check_result`
+- `get_auth_level`
+- `get_uuid`
 
-**保留的空壳方法（向后兼容调用方代码不报错）：**
+**需要保留的空壳方法（向后兼容，避免调用方报错）：**
 - `check_user(site, params)` → 返回 `(True, "")`
 - `get_authsites()` → 返回 `{}`
+
+**需要同步修改的调用方：**
+- `run.py:107` — 移除 `WebAction.auth_user_level()` 启动调用
 
 ### 1.7 level 属性在系统中的作用
 
@@ -464,7 +467,7 @@ self.domain = f"{parsed.scheme}://{parsed.netloc}"
 | `get_brush_conf` | - | dict | 返回 `{url: xpath_config}` |
 | `get_public_sites` | - | list[str] | 返回公开站点 URL 列表 |
 
-> **注意：** 原 .so 中的 `get_authsites`、`check_user`、`get_auth_level`、`get_uuid`、`__register_uuid`、`__requestauth` 等认证相关方法已全部移除。
+> **注意：** 原 .so 中的 `get_authsites`、`check_user`、`get_auth_level`、`get_uuid`、`__register_uuid`、`__requestauth` 等认证相关方法在本次迭代中将全部不实现（见附录 B）。
 
 ### 6.3 加密体系
 
@@ -581,6 +584,7 @@ ubits.club, wintersakura.net, zmpt.cc
 #### Task 1.4：移除启动时认证调用
 - **文件**：`run.py`
 - **内容**：移除 `WebAction.auth_user_level()` 调用（行 107）
+- **背景**：该调用在启动时向合作站点 API 发送认证请求，认证系统移除后不再需要
 - **验收**：启动时不再执行认证流程
 
 ### Phase 2：SiteConfigManager 实现（P0，顺序执行）
@@ -594,6 +598,7 @@ ubits.club, wintersakura.net, zmpt.cc
   - `__decrypt`：Fernet 解密实现
   - 加载 `user.sites.bin`（与 `user.py` 同目录，路径 `os.path.join(os.path.dirname(__file__), 'user.sites.bin')`）
   - 解析解密后的 JSON 站点数据结构
+- **不实现的方法**：认证相关方法（`get_auth_level`、`get_uuid`、`__register_uuid`、`__requestauth` 等）均不在本类中实现，详见附录 B
 - **依赖**：`cryptography.fernet`（已在 `requirements.txt`）
 - **技术风险**：Fernet key 的派生方式需从 AES key `0f941adc1ca38b0d` 确认
 - **验收**：能正确解密 `user.sites.bin` 并解析 JSON，打印顶层 key 确认结构
@@ -624,11 +629,11 @@ ubits.club, wintersakura.net, zmpt.cc
   - 所有用户 `level` 统一设为 2
 - **验收**：`User()` 实例化不报错
 
-#### Task 3.2：User 类新增方法 + 修改现有方法
+#### Task 3.2：User 类新增方法 + 修改现有方法（含认证移除）
 - **文件**：`web/backend/user.py`
-- **新增空壳方法**：
-  - `check_user(site, params)` → 返回 `(True, "")`
-  - `get_authsites()` → 返回 `{}`
+- **新增空壳方法（替代 .so 中的认证逻辑）**：
+  - `check_user(site, params)` → 返回 `(True, "")`（原 .so 通过合作站点 API 校验，现跳过校验直接放行）
+  - `get_authsites()` → 返回 `{}`（原 .so 返回含加密凭据的认证站点配置，现返回空字典使认证弹窗无内容）
 - **新增委托方法**：
   - `as_dict()` → 返回 `{id, name, pris}` 字典
   - `get_indexer(...)` → 委托 `SiteConfigManager.get_indexer_conf(...)`
@@ -719,9 +724,9 @@ from urllib.parse import urlparse
 from cryptography.fernet import Fernet
 ```
 
-## 附录 B：已删除的认证相关方法（不实现）
+## 附录 B：不实现的认证相关方法
 
-以下是 .so 中存在但因认证移除而不需要实现的方法：
+以下是 .so 中存在但因本次迭代移除认证系统而不需要实现的方法：
 
 | 类 | 方法 | 原功能 |
 |---|---|---|
