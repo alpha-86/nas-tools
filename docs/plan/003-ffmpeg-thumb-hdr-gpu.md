@@ -99,10 +99,12 @@ def detect_hdr_type(video_path):
     if not metadata:
         return HdrType.UNKNOWN
 
+    has_video_stream = False
     for stream in metadata.get("streams", []):
         if stream.get("codec_type") != "video":
             continue
 
+        has_video_stream = True
         color_transfer = stream.get("color_transfer", "")
 
         # 杜比视界优先检测（side_data_list 中包含 DOVI 配置）
@@ -122,6 +124,10 @@ def detect_hdr_type(video_path):
         # 有视频流但 color_transfer 缺失 — 无法判断，返回 UNKNOWN
         if not color_transfer:
             return HdrType.UNKNOWN
+
+    # 无视频流（音频/字幕/图片文件）— 无法生成缩略图
+    if not has_video_stream:
+        return HdrType.UNKNOWN
 
     return HdrType.SDR
 ```
@@ -260,12 +266,11 @@ def detect_gpu_type():
     """
     检测 GPU 类型，返回 GpuType 枚举。
     VAAPI 检测：ffmpeg 支持 vaapi + 设备文件存在。
-    额外验证：尝试 vaapi 初始化，失败则缓存结果避免重复检测。
+    结果缓存到类变量，避免重复执行 ffmpeg -hwaccels。
     """
     hwaccels = FfmpegHelper._get_ffmpeg_hwaccels()
     if "vaapi" in hwaccels and os.path.exists("/dev/dri/renderD128"):
-        # 可选：通过 vainfo 或 ffmpeg 试初始化验证驱动可用
-        # 简化方案：信任设备文件存在 + ffmpeg 报告的 hwaccel 支持
+        # 信任设备文件存在 + ffmpeg 报告的 hwaccel 支持
         # 如果后续 vaapi 调用失败，fallback 逻辑会兜底
         return GpuType.VAAPI
     # NVIDIA 预留（暂不主动检测）
@@ -439,9 +444,8 @@ cmd = [
 
 ### 2.9 `-ss` 位置策略
 
-- **默认**：`-ss` 在 `-i` 之前（input seeking），高效但可能不精确
-- **Fallback**：如果 input seeking 截图结果异常（输出文件为空或 ffmpeg 报错），自动用 `-ss` 在 `-i` 之后（output seeking）重试
-- **说明**：input seeking 对 MKV/MP4 精度足够；对 TS 流容器可能存在关键帧偏差，但本场景是生成缩略图，轻微偏差可接受
+- **统一使用 input seeking**：`-ss` 在 `-i` 之前，高效跳读
+- **说明**：input seeking 对 MKV/MP4 精度足够；对 TS 流容器可能存在关键帧偏差，但本场景是生成缩略图，轻微偏差可接受。如果未来发现特定容器格式截图为空，再补充 output seeking 版本
 
 ### 2.10 Docker 镜像修改
 
@@ -853,6 +857,6 @@ app:
 3. **性能**：HDR tone-mapping（特别是 CPU 路径）比简单截图慢很多。对于剧集刮削（一次性批量生成），可以接受。如果未来需要实时生成，可考虑缓存策略。
 4. **ffprobe 延迟**：每次生成缩略图前额外执行一次 ffprobe，增加约 0.5-1s 延迟。可通过缓存 video metadata 优化（后续改进）。
 5. **NVIDIA 预留**：代码写好但未主动检测，避免在无对应硬件时误判。后续有环境时取消注释即可。
-6. **`-ss` 位置**：从 `-i` 之后移到之前（input seeking），大幅提升 seek 效率。对 MKV/MP4 精度足够；对 TS 流可能有偏差，但 fallback 逻辑（输出文件为空时重试）可以兜底。
-7. **alpine:edge 稳定性**：edge 是滚动更新，偶尔可能有包不兼容。作为 Builder 阶段镜像，构建时固定即可；如遇问题可回退到 stable + 单独安装 edge ffmpeg。
+6. **`-ss` 位置**：从 `-i` 之后移到之前（input seeking），大幅提升 seek 效率。对 MKV/MP4 精度足够；对 TS 流可能有偏差，但本场景可接受。
+7. **alpine:edge 稳定性**：edge 是滚动更新，偶尔可能有包不兼容。最终运行镜像也会基于 edge rootfs，构建时固定镜像 digest 可减小滚动更新风险；如遇问题可回退到 stable + 单独安装 edge ffmpeg。
 8. **DV Profile 5**：单层 IPTPQc2 格式在 ffmpeg 中支持不完整，ffprobe 可能不输出 DOVI side_data，会降级到 PQ 或 SDR 处理。
