@@ -59,7 +59,14 @@ App.wsgi_app = ProxyFix(App.wsgi_app)
 App.config['JSON_AS_ASCII'] = False
 App.config['JSON_SORT_KEYS'] = False
 App.config['SOCK_SERVER_OPTIONS'] = {'ping_interval': 25}
-App.secret_key = os.urandom(24)
+# 从配置读取 secret_key，没有则生成并持久化（避免重启后 session 失效）
+_secret_key = Config().get_config('app').get('secret_key')
+if not _secret_key:
+    _secret_key = hashlib.sha256(os.urandom(32)).hexdigest()
+    _cfg = Config().get_config()
+    _cfg.setdefault('app', {})['secret_key'] = _secret_key
+    Config().save_config(_cfg)
+App.secret_key = _secret_key
 App.permanent_session_lifetime = datetime.timedelta(days=30)
 
 # Flask Socket
