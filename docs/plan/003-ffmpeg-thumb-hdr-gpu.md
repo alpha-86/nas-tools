@@ -249,7 +249,7 @@ zscale=t=bt709:m=bt709:r=tv,format=yuv420p
 
 ### 2.5 GPU 检测策略
 
-采用 **ffmpeg 能力自检 + 设备文件检测 + 驱动验证** 策略：
+采用 **ffmpeg 能力自检 + 设备文件检测** 策略，GPU 调用失败由 fallback 逻辑兜底：
 
 ```python
 class GpuType(Enum):
