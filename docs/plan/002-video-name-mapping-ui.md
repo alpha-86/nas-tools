@@ -24,7 +24,7 @@
 
 **问题**：已有映射时 `name_test` 返回的 `name` 已是映射后值（如"漫长的季节"），而 YAML key 是映射前的清洗后名称（如 "the_long_season"），二者不同导致查/删失败。
 
-**修复**：`__fix_name()` 加 `apply_mapping` 参数，在 `MetaVideo.__init__` 中先清洗不映射获取 raw 值，再按 `get_name()` 优先级选择 `raw_name`，确保与最终展示名一一对应。
+**修复**：提取纯函数 `__normalize_mapping_name()` 做无状态清洗，在 `MetaVideo.__init__` 中用纯函数获取 raw 值，不触发 `__fix_name()` 的副作用。`__fix_name()` 保持现有逻辑不变，只在映射查询前复用该纯函数得到清洗后的 name。
 
 **`app/media/meta/_base.py`** — `MetaBase.__init__` line 159 新增：
 
@@ -32,15 +32,26 @@
 self.raw_name = None
 ```
 
-**`app/media/meta/metavideo.py`** — `__fix_name()` 加 `apply_mapping` 参数（默认 `True`，向后兼容）：
+**`app/media/meta/metavideo.py`** — 新增纯函数 `__normalize_mapping_name()`（line 140 附近，紧挨 `__fix_name`）：
 
 ```python
-def __fix_name(self, name, apply_mapping=True):
+def __normalize_mapping_name(self, name):
+    """纯函数：只做清洗，不修改实例状态，不查映射。返回清洗后的名称。"""
     if not name:
         return name
     name = re.sub(r'%s' % self._name_nostring_re, '', name,
                   flags=re.IGNORECASE).strip()
     name = re.sub(r'\s+', ' ', name)
+    return name
+```
+
+**`__fix_name()` 保持现有逻辑不变**，仅在映射查询前复用纯函数：
+
+```python
+def __fix_name(self, name):
+    if not name:
+        return name
+    name = self.__normalize_mapping_name(name)  # 复用纯函数做清洗
     if name.isdigit() \
             and int(name) < 1800 \
             and not self.year \
@@ -54,18 +65,17 @@ def __fix_name(self, name, apply_mapping=True):
             name = None
         elif self.is_in_episode(int(name)) and not self.begin_season:
             name = None
-    if apply_mapping:
-        name = Config().get_video_name_mapping(name)
+    name = Config().get_video_name_mapping(name)
     return name
 ```
 
 **`MetaVideo.__init__` line 129-131** 改为：
 
 ```python
-# 先清洗不映射，保存原始清洗值
-raw_cn = self.__fix_name(self.cn_name, apply_mapping=False)
-raw_en = self.__fix_name(self.en_name, apply_mapping=False)
-# 再映射（apply_mapping=True 为默认值）
+# 用纯函数获取清洗后、映射前的原始名称（无副作用）
+raw_cn = self.__normalize_mapping_name(self.cn_name)
+raw_en = self.__normalize_mapping_name(self.en_name)
+# __fix_name 保持原有副作用逻辑，只调用一次
 self.cn_name = self.__fix_name(self.cn_name)
 self.en_name = StringUtils.str_title(self.__fix_name(self.en_name))
 # 按 get_name() 优先级选择 raw_name，确保与最终展示名一致
@@ -79,8 +89,9 @@ elif self.cn_name:
 ```
 
 **说明**：
+- `__normalize_mapping_name()` = 纯函数，只做清洗（去干扰词、strip、压缩空格），不修改 `self` 状态，不查映射
+- `__fix_name()` = 保持现有副作用逻辑（如纯数字处理 → `begin_episode`），只调用一次，不重复
 - `raw_name` = "清洗后、映射前"的名称 = 实际用于查 YAML 的 source name
-- `apply_mapping=False` 时只做清洗（去干扰词、压缩空格、处理纯数字），不查映射
 - `get_name()` 优先级：全中文 `cn_name` → `en_name` → 非全中文 `cn_name`，`raw_name` 按同样优先级选择，避免 cn_name/en_name 混淆
 
 **`web/action.py`** — `mediainfo_dict()` 新增返回字段：
@@ -400,7 +411,7 @@ function delete_name_mapping() {
 | 文件 | 变更 | 说明 |
 |------|------|------|
 | `app/media/meta/_base.py` | +1 行 | `self.raw_name = None` |
-| `app/media/meta/metavideo.py` | 修 `__fix_name` + `__init__` | `apply_mapping` 参数 + 按 `get_name()` 优先级选 `raw_name` |
+| `app/media/meta/metavideo.py` | 新增 `__normalize_mapping_name` + 修 `__fix_name` + `__init__` | 纯函数清洗 + `__fix_name` 复用 + 按 `get_name()` 优先级选 `raw_name` |
 | `config.py` | +4 方法，修 2 方法 | CRUD（锁内 RMW）+ 原子写入 + 文件不存在清空 + getmtime |
 | `web/action.py` | +3 action + 1 字段 | 新端点 + `mediainfo_dict` 返回 `raw_name` |
 | `web/templates/rename/mediafile.html` | +1 按钮 + 1 Modal + JS | 弹窗内自行 name_test，不依赖 chips |
@@ -417,3 +428,4 @@ function delete_name_mapping() {
 6. **文件删除场景**：运行中删除 `video_name_mapping.yaml` → 再次识别 → 不使用旧映射（内存已清空）；首次保存自动创建文件
 7. **识别刷新**：保存/删除后自动重新识别的是正确文件行（通过 hidden 字段 `filename_hidden` + `filepos_hidden`）
 8. **无法识别分支**：识别失败时弹窗禁用保存，提示"请先确认识别结果"
+9. **无副作用验证**：纯数字/集数类名称（如 `01.mkv`）识别结果与改动前一致，`begin_episode`/`begin_season` 不因 `raw_name` 采集而改变
