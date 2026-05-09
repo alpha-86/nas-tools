@@ -51,7 +51,7 @@ def sigal_handler(num, stack):
     os._exit(0)
 
 
-def get_run_config(forcev4=False):
+def get_run_config(forcev4=False, port=None):
     """
     获取运行配置
     """
@@ -68,6 +68,8 @@ def get_run_config(forcev4=False):
         elif app_conf.get("web_host"):
             _web_host = app_conf.get("web_host").replace('[', '').replace(']', '')
         _web_port = int(app_conf.get('web_port')) if str(app_conf.get('web_port', '')).isdigit() else 3000
+        if port:
+            _web_port = port
         _ssl_cert = app_conf.get('ssl_cert')
         _ssl_key = app_conf.get('ssl_key')
         _ssl_key = app_conf.get('ssl_key')
@@ -135,8 +137,15 @@ if __name__ == '__main__':
             p1 = threading.Thread(target=traystart, daemon=True)
             p1.start()
 
-    # 初始化浏览器驱动
-    init_chrome()
+    # 初始化浏览器驱动（可选，失败不阻断服务）
+    try:
+        init_chrome()
+    except Exception as e:
+        log.warn(f'浏览器驱动初始化失败，跳过：{e}')
 
     # Flask启动
-    App.run(**get_run_config(is_windows_exe))
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=None, help='Web port')
+    args = parser.parse_args()
+    App.run(**get_run_config(is_windows_exe, port=args.port))

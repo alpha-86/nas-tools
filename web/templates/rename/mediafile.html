@@ -59,6 +59,40 @@
     </div>
   </div>
 </div>
+<div class="modal modal-blur fade" id="modal-name-mapping" tabindex="-1" role="dialog" aria-hidden="true"
+     data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">名称映射配置</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">文件名称</label>
+          <input type="text" id="name_mapping_filename" class="form-control" readonly>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">原始名称</label>
+          <input type="text" id="name_mapping_source" class="form-control" readonly>
+        </div>
+        <div class="mb-3">
+          <label class="form-label required">映射名称</label>
+          <input type="text" id="name_mapping_target" class="form-control" placeholder="输入映射后的名称">
+        </div>
+        <!-- 保存 filename 和 filepos，用于保存后自动重新识别 -->
+        <input type="hidden" id="name_mapping_filename_hidden">
+        <input type="hidden" id="name_mapping_filepos_hidden">
+        <input type="hidden" id="name_mapping_has_existing" value="0">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link me-auto" data-bs-dismiss="modal">取消</button>
+        <a id="name_mapping_delete_btn" href="javascript:delete_name_mapping()" class="btn btn-danger d-none">删除映射</a>
+        <a id="name_mapping_save_btn" href="javascript:save_name_mapping()" class="btn btn-primary">保存映射</a>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal modal-blur fade" id="modal-mediafile-modify" tabindex="-1" role="dialog" aria-hidden="true"
      data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
@@ -141,6 +175,95 @@
       $(card_b).show();
       $(card_a).hide();
     }
+  }
+
+  // 显示名称映射弹窗
+  function show_name_mapping_modal(name, id) {
+      // 保存 filename 和 filepos，供 save/delete 后自动重新识别
+      $("#name_mapping_filename_hidden").val(name);
+      $("#name_mapping_filepos_hidden").val(id);
+      $("#name_mapping_filename").val(name);
+      $("#name_mapping_target").removeClass("is-invalid");
+
+      // 自行请求识别结果（含 raw_name）
+      ajax_post("name_test", {"name": name}, function(ret) {
+          if (ret.code !== 0 || !ret.data || ret.data.name === "无法识别") {
+              $("#name_mapping_source").val("无法识别");
+              $("#name_mapping_target").val("").prop("disabled", true);
+              $("#name_mapping_save_btn").addClass("disabled");
+              $("#name_mapping_delete_btn").addClass("d-none");
+              $("#modal-name-mapping").modal('show');
+              return;
+          }
+
+          let raw_name = ret.data.raw_name || ret.data.name;
+          $("#name_mapping_source").val(raw_name);
+          $("#name_mapping_target").prop("disabled", false);
+          $("#name_mapping_save_btn").removeClass("disabled");
+
+          // 查询已有映射
+          ajax_post("get_video_name_mappings", {name: raw_name}, function(ret2) {
+              if (ret2.code === 0 && ret2.data && Object.keys(ret2.data).length > 0) {
+                  let mapped_value = Object.values(ret2.data)[0];
+                  $("#name_mapping_target").val(mapped_value);
+                  $("#name_mapping_delete_btn").removeClass("d-none");
+                  $("#name_mapping_has_existing").val("1");
+              } else {
+                  $("#name_mapping_target").val("");
+                  $("#name_mapping_delete_btn").addClass("d-none");
+                  $("#name_mapping_has_existing").val("0");
+              }
+              $("#modal-name-mapping").modal('show');
+          });
+      });
+  }
+
+  // 保存名称映射
+  function save_name_mapping() {
+      let raw_name = $("#name_mapping_source").val();
+      let target = $("#name_mapping_target").val();
+      let filename = $("#name_mapping_filename_hidden").val();
+      let filepos = $("#name_mapping_filepos_hidden").val();
+
+      if (!target) {
+          $("#name_mapping_target").addClass("is-invalid");
+          return;
+      }
+      $("#name_mapping_target").removeClass("is-invalid");
+
+      ajax_post("set_video_name_mapping", {key: raw_name, value: target}, function(ret) {
+          if (ret.code === 0) {
+              $("#modal-name-mapping").modal('hide');
+              show_success_modal(ret.msg, function() {
+                  // 关闭成功提示后自动重新识别当前文件
+                  mediafile_name_test(filename, "testresults_" + filepos);
+              });
+          } else {
+              show_fail_modal(ret.msg);
+          }
+      });
+  }
+
+  // 删除名称映射
+  function delete_name_mapping() {
+      let raw_name = $("#name_mapping_source").val();
+      let filename = $("#name_mapping_filename_hidden").val();
+      let filepos = $("#name_mapping_filepos_hidden").val();
+
+      show_confirm_modal("确定要删除该名称映射吗？", function() {
+          hide_confirm_modal();
+          ajax_post("delete_video_name_mapping", {key: raw_name}, function(ret) {
+              if (ret.code === 0) {
+                  $("#modal-name-mapping").modal('hide');
+                  show_success_modal(ret.msg, function() {
+                      // 关闭成功提示后自动重新识别当前文件
+                      mediafile_name_test(filename, "testresults_" + filepos);
+                  });
+              } else {
+                  show_fail_modal(ret.msg);
+              }
+          });
+      });
   }
 
   //刷新文件列表
@@ -448,6 +571,7 @@
             <div class="col-auto">
               <div class="mt-1 btn-list">
                 <button onclick='mediafile_name_test("{FILENAME}", "testresults_{FILEPOS}")' class="btn btn-sm btn-pill">识别</button>
+                <button onclick='show_name_mapping_modal("{FILENAME}", "{FILEPOS}")' class="btn btn-sm btn-pill">名称映射</button>
                 <button onclick='mediafile_transfer("{FILENAME}", "{FILEPOS}")' class="btn btn-sm btn-pill">转移</button>
                 <button onclick='mediafile_scraper("{FILENAME}", "{FILEPOS}")' class="btn btn-sm btn-pill">刮削</button>
                 <button onclick='mediafile_subtitle("{FILENAME}", "{FILEPOS}")' class="btn btn-sm btn-pill">下载字幕</button>

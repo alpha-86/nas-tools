@@ -104,6 +104,9 @@ class WebAction:
             "brushtask_detail": self.__brushtask_detail,
             "update_brushtask_state": self.__update_brushtask_state,
             "name_test": self.__name_test,
+            "get_video_name_mappings": self.__get_video_name_mappings,
+            "set_video_name_mapping": self.__set_video_name_mapping,
+            "delete_video_name_mapping": self.__delete_video_name_mapping,
             "rule_test": self.__rule_test,
             "net_test": self.__net_test,
             "add_filtergroup": self.__add_filtergroup,
@@ -2068,6 +2071,7 @@ class WebAction:
         return {
             "type": media_info.type.value if media_info.type else "",
             "name": media_info.get_name(),
+            "raw_name": media_info.raw_name or media_info.get_name(),
             "title": media_info.title,
             "year": media_info.year,
             "season_episode": media_info.get_season_episode_string(),
@@ -5134,6 +5138,33 @@ class WebAction:
         data.pop("method")
         result = PluginManager().run_plugin_method(pid=plugin_id, method=method, **data)
         return {"code": 0, "result": result}
+
+    @staticmethod
+    def __get_video_name_mappings(data):
+        result = Config().list_video_name_mapping(data.get("name"))
+        return {"code": 0, "data": result}
+
+    @staticmethod
+    def __set_video_name_mapping(data):
+        key, value = data.get("key"), data.get("value")
+        if not key or not value:
+            return {"code": 1, "msg": "原始名称和映射名称不能为空"}
+        try:
+            Config().set_video_name_mapping(key, value)
+            return {"code": 0, "msg": "保存成功"}
+        except Exception as e:
+            return {"code": 1, "msg": str(e)}
+
+    @staticmethod
+    def __delete_video_name_mapping(data):
+        key = data.get("key")
+        if not key:
+            return {"code": 1, "msg": "原始名称不能为空"}
+        try:
+            Config().delete_video_name_mapping(key)
+            return {"code": 0, "msg": "删除成功"}
+        except Exception as e:
+            return {"code": 1, "msg": str(e)}
 
     def get_commands(self):
         """

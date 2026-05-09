@@ -126,9 +126,20 @@ class MetaVideo(MetaBase):
         # 没有识别出类型时默认为电影
         if not self.type:
             self.type = MediaType.MOVIE
-        # 去掉名字中不需要的干扰字符，过短的纯数字不要
+        # 用纯函数获取清洗后、映射前的原始名称（无副作用）
+        raw_cn = self.__normalize_mapping_name(self.cn_name)
+        raw_en = self.__normalize_mapping_name(self.en_name)
+        # __fix_name 保持原有副作用逻辑，只调用一次
         self.cn_name = self.__fix_name(self.cn_name)
         self.en_name = StringUtils.str_title(self.__fix_name(self.en_name))
+        # 按 get_name() 优先级选择 raw_name，确保与最终展示名一致
+        # get_name() 逻辑：全中文 cn_name → en_name → 非全中文 cn_name
+        if self.cn_name and StringUtils.is_all_chinese(self.cn_name):
+            self.raw_name = raw_cn
+        elif self.en_name:
+            self.raw_name = raw_en
+        elif self.cn_name:
+            self.raw_name = raw_cn
         # 处理part
         if self.part and self.part.upper() == "PART":
             self.part = None
@@ -137,12 +148,19 @@ class MetaVideo(MetaBase):
         # 自定义占位符
         self.customization = CustomizationMatcher().match(title=original_title) or None
 
-    def __fix_name(self, name):
+    def __normalize_mapping_name(self, name):
+        """纯函数：只做清洗，不修改实例状态，不查映射。返回清洗后的名称。"""
         if not name:
             return name
         name = re.sub(r'%s' % self._name_nostring_re, '', name,
                       flags=re.IGNORECASE).strip()
         name = re.sub(r'\s+', ' ', name)
+        return name
+
+    def __fix_name(self, name):
+        if not name:
+            return name
+        name = self.__normalize_mapping_name(name)  # 复用纯函数做清洗
         if name.isdigit() \
                 and int(name) < 1800 \
                 and not self.year \
