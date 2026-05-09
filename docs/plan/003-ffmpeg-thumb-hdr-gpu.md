@@ -449,28 +449,23 @@ cmd = [
 
 ### 2.10 Docker 镜像修改
 
-**方案**：基础镜像改为 `alpine:edge`，统一从 edge 仓库安装所有包，避免混用 stable + edge 带来 ABI 风险。
+**由 Plan 004 提供 ffmpeg 8.1.1 能力。**
+
+Plan 004（Docker 镜像升级）采用 `alpine:latest` + 仅 ffmpeg 及 VAAPI 驱动从 edge 仓库安装的策略，在保留 Python 3.12 稳定性的同时获取 ffmpeg 8.1.1。003 不再单独修改 Dockerfile，而是依赖 004 的镜像基础。
+
+**Plan 004 中 ffmpeg 8.1.1 的安装方式**：
 
 ```dockerfile
-# 修改前
-FROM alpine:latest AS Builder
-
-# 修改后
-FROM alpine:edge AS Builder
+# 在 alpine:latest 基础上，从 edge 仓库安装 ffmpeg
+RUN apk add --no-cache ffmpeg intel-media-driver libva-dev libva-utils \
+    --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
 ```
-
-**优势**：
-- 所有包版本一致，无 ABI 兼容性问题
-- ffmpeg 8.1.1 自带 zscale/tonemap/hwdownload 滤镜
-- 简单直接，无需 `--repository` 覆盖
-
-**风险**：`alpine:edge` 是滚动更新，偶尔可能有包不兼容。如果 Dockerfile 使用多阶段构建（Builder + Runtime），两个阶段都需使用 `alpine:edge`，否则 Runtime 阶段的 ffmpeg 版本可能与 Builder 不一致。构建时通过固定镜像 digest 可减小滚动更新风险。
 
 **验证清单**（构建后需确认）：
 
 ```bash
 # 在 Docker 容器中执行
-ffmpeg -version                      # 确认版本 >= 6.0
+ffmpeg -version                      # 确认版本 >= 8.0
 ffmpeg -filters 2>&1 | grep zscale   # 确认 zscale 滤镜可用
 ffmpeg -filters 2>&1 | grep tonemap  # 确认 tonemap 滤镜可用
 ffmpeg -filters 2>&1 | grep hwdownload  # 确认 hwdownload 可用
