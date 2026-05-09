@@ -294,7 +294,7 @@ def search():
     # 权限
     if current_user.is_authenticated:
         username = current_user.username
-        pris = User().get_user(username).get("pris")
+        pris = User().get_user(username).pris
     else:
         pris = ""
     # 结果
