@@ -122,8 +122,10 @@ function requirements_update {
             # Debian 构建依赖
             DEBIAN_FRONTEND="noninteractive"
             apt-get update -y
-            apt-get install -y python3-dev libffi-dev gcc musl-dev \
-                libxml2-dev libxslt-dev linux-headers-amd64 || true
+            apt-get install -y python3-dev libffi-dev gcc \
+                libxml2-dev libxslt-dev "linux-headers-$(uname -r)" || \
+                apt-get install -y python3-dev libffi-dev gcc \
+                    libxml2-dev libxslt-dev
         else
             # Alpine 构建依赖（与 Dockerfile 的 .build-deps 保持一致）
             apk add --no-cache --virtual .update-build-deps \
@@ -132,17 +134,19 @@ function requirements_update {
         fi
 
         if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
-            package_cn
+            if [ "${is_debian}" = "true" ]; then
+                package_cn_debian
+            else
+                package_cn
+            fi
             /opt/venv/bin/pip install --upgrade pip wheel -i "${PYPI_MIRROR}"
-            /opt/venv/bin/pip install "setuptools<81" -i "${PYPI_MIRROR}"
-            /opt/venv/bin/pip install cython -i "${PYPI_MIRROR}"
-            /opt/venv/bin/pip install -r requirements.txt --no-build-isolation -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install "setuptools<82" -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install -r requirements.txt -i "${PYPI_MIRROR}"
             install_status=$?
         else
             /opt/venv/bin/pip install --upgrade pip wheel
-            /opt/venv/bin/pip install "setuptools<81"
-            /opt/venv/bin/pip install cython
-            /opt/venv/bin/pip install -r requirements.txt --no-build-isolation
+            /opt/venv/bin/pip install "setuptools<82"
+            /opt/venv/bin/pip install -r requirements.txt
             install_status=$?
         fi
 

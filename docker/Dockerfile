@@ -40,7 +40,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # 升级 pip 工具链，安装依赖
-# setuptools<81 保留原有 pin，避免 legacy 依赖不兼容
+# setuptools<82: 82+ 移除了 pkg_resources（cn2an 等依赖）
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip wheel \
     && pip install "setuptools<82" \
