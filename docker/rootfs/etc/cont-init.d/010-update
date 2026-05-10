@@ -128,8 +128,11 @@ function requirements_update {
         fi
 
         if [ "${is_debian}" = "true" ]; then
-            # Debian 构建依赖
+            # Debian 构建依赖（package_cn_debian 已做 update，非 CN 需手动）
             DEBIAN_FRONTEND="noninteractive"
+            if [ "${NASTOOL_CN_UPDATE}" != "true" ]; then
+                apt-get update -y
+            fi
             apt-get install -y python3-dev libffi-dev gcc \
                 libxml2-dev libxslt-dev "linux-headers-$(uname -r)" || \
                 apt-get install -y python3-dev libffi-dev gcc \
