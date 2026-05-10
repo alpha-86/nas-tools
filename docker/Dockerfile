@@ -8,7 +8,9 @@ RUN apk add --no-cache --virtual .build-deps \
         musl-dev \
         libxml2-dev \
         libxslt-dev \
-        linux-headers
+        linux-headers \
+        openssl-dev \
+        cargo
 
 # ffmpeg 及 VAAPI 驱动先从 edge 仓库安装（8.1.x），确保 edge 的库优先
 # 必须同时添加 edge/main（glslang 等依赖）和 edge/community
@@ -39,10 +41,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # 升级 pip 工具链，安装依赖
 # setuptools<81 保留原有 pin，避免 legacy 依赖不兼容
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip wheel \
-    && pip install "setuptools<81" \
-    && pip install cython \
-    && pip install -r https://raw.githubusercontent.com/alpha-86/nas-tools/master/requirements.txt --no-build-isolation
+    && pip install "setuptools<82" \
+    && pip install -r /tmp/requirements.txt
 
 # 清理
 RUN apk del --purge .build-deps \
