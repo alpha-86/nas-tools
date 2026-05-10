@@ -44,7 +44,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip wheel \
     && pip install "setuptools<82" \
-    && pip install cython hatchling \
+    && pip install cython hatchling hatch-requirements-txt \
     && pip install -r /tmp/requirements.txt --no-build-isolation
 
 # 清理

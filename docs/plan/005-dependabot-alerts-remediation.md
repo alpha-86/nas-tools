@@ -464,7 +464,7 @@ Expected: commands exit 0.
 - Verify: `docker/Dockerfile`
 - Verify: `docker/rootfs/etc/cont-init.d/010-update`
 
-- [ ] **Step 1: Build image**
+- [x] **Step 1: Build image**
 
 Run:
 
@@ -472,9 +472,9 @@ Run:
 docker build -t nas-tools:dependabot-remediation .
 ```
 
-Expected: build succeeds and pip installs from `/tmp/requirements.txt`.
+Result: build succeeded. Added `hatch-requirements-txt` to Dockerfile build deps to resolve `pymongo==4.12.0` metadata generation failure under `--no-build-isolation`.
 
-- [ ] **Step 2: Inspect installed versions inside image**
+- [x] **Step 2: Inspect installed versions inside image**
 
 Run:
 
@@ -486,9 +486,19 @@ print(PIL.__version__, pygments.__version__, jwt.__version__, requests.__version
 PY
 ```
 
-Expected: target versions are installed from `/opt/venv`.
+Result: all versions matched targets:
+- cryptography 46.0.7 (expected 46.0.7)
+- flask 3.1.3 (expected 3.1.3)
+- lxml 6.1.0 (expected 6.1.0)
+- mako 1.3.12 (expected 1.3.12)
+- pillow 12.2.0 (expected 12.2.0)
+- pygments 2.20.0 (expected 2.20.0)
+- jwt 2.12.0 (expected 2.12.0)
+- requests 2.33.0 (expected 2.33.0)
+- urllib3 2.6.3 (expected 2.6.3)
+- werkzeug 3.1.6 (expected 3.1.6)
 
-- [ ] **Step 3: Start container smoke test**
+- [x] **Step 3: Start container smoke test**
 
 Run:
 
@@ -500,31 +510,41 @@ curl -I http://127.0.0.1:3000/
 docker rm -f nas-tools-deps-smoke
 ```
 
-Expected: container stays up long enough to serve HTTP; logs do not show Flask/Werkzeug import errors.
+Result: container stayed up, logs showed normal Flask startup (`Serving Flask app 'web.main'`), and `curl -I http://127.0.0.1:3000/` returned `HTTP/1.1 200 OK`. No Flask/Werkzeug import errors observed.
 
 ### Task 5: Confirm Dependabot closure
 
 **Files:**
 - Verify only.
 
-- [ ] **Step 1: Push branch and wait for Dependabot/security scan**
+- [x] **Step 1: Push branch and wait for Dependabot/security scan**
 
-Run:
+Branch pushed and PR merged.
 
-```bash
-git push -u origin dependabot-alerts-remediation
-```
+- [x] **Step 2: Re-query open alerts**
 
-- [ ] **Step 2: Re-query open alerts**
-
-Run after GitHub has scanned the branch/PR:
+Run on 2026-05-10:
 
 ```bash
-gh api --paginate 'repos/alpha-86/nas-tools/dependabot/alerts?state=open&per_page=100' \
-  | jq -r '.[] | [.number, .dependency.package.name, .security_vulnerability.severity, .security_advisory.summary, .security_vulnerability.first_patched_version.identifier, .html_url] | @tsv'
+curl -s -H "Authorization: token $(gh auth token)" \
+  "https://api.github.com/repos/alpha-86/nas-tools/dependabot/alerts?state=open&per_page=100" | \
+  python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+packages = {}
+for a in data:
+    pkg = a.get('dependency', {}).get('package', {}).get('name', 'unknown')
+    sev = a.get('security_vulnerability', {}).get('severity', 'unknown')
+    if pkg not in packages:
+        packages[pkg] = {'count': 0, 'severity': sev}
+    packages[pkg]['count'] += 1
+print(f'Total open alerts: {len(data)}')
+for pkg, info in sorted(packages.items()):
+    print(f'  {pkg}: {info[\"count\"]} ({info[\"severity\"]})')
+"
 ```
 
-Expected: alerts for the 11 packages above are closed or no longer applicable. If an alert remains, compare the package casing in `requirements.txt` with Dependabot's package name and verify the target version is installed in the manifest Dependabot scans.
+Result: **Total open alerts: 0**. All 29 previously open Dependabot alerts are now closed. The 11 upgraded packages (cryptography, Flask, lxml, Mako, pillow, Pygments, PyJWT, python-dotenv, requests, urllib3, Werkzeug) no longer appear in the open alerts list.
 
 ## 验证命令
 
