@@ -112,17 +112,32 @@ function requirements_update {
     hash_new=$(sha256sum requirements.txt)
     if [ "${hash_old}" != "${hash_new}" ]; then
         echo "检测到requirements.txt有变化，重新安装依赖..."
+
+        # 安装构建依赖（与 Dockerfile 的 .build-deps 保持一致）
+        apk add --no-cache --virtual .update-build-deps \
+            python3-dev libffi-dev gcc musl-dev \
+            libxml2-dev libxslt-dev linux-headers
+
         if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
             package_cn
-            apk add --no-cache libffi-dev gcc musl-dev libxml2-dev libxslt-dev
-            pip install --upgrade pip setuptools wheel -i "${PYPI_MIRROR}"
-            pip install -r requirements.txt -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install --upgrade pip wheel -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install "setuptools<81" -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install cython -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install -r requirements.txt --no-build-isolation -i "${PYPI_MIRROR}"
+            install_status=$?
         else
-            apk add --no-cache libffi-dev gcc musl-dev libxml2-dev libxslt-dev
-            pip install --upgrade pip setuptools wheel
-            pip install -r requirements.txt
+            /opt/venv/bin/pip install --upgrade pip wheel
+            /opt/venv/bin/pip install "setuptools<81"
+            /opt/venv/bin/pip install cython
+            /opt/venv/bin/pip install -r requirements.txt --no-build-isolation
+            install_status=$?
         fi
-        if [ $? -ne 0 ]; then
+
+        # 清理构建依赖，避免镜像膨胀
+        apk del --purge .update-build-deps
+
+        # 检查 pip install 结果（必须在清理后，用保存的状态）
+        if [ "${install_status}" -ne 0 ]; then
             echo "无法安装依赖，请更新镜像！"
             exit 1
         else
