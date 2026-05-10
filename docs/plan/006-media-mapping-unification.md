@@ -6,12 +6,12 @@
 
 ## 一、背景与问题
 
-当前有两套映射逻辑：
+当前代码里存在两套映射逻辑，但实际只有一套被持续使用：
 
-| 配置 | 当前职责 | 当前问题 |
+| 配置 | 当前状态 | 计划处理 |
 |---|---|---|
-| `video_name_mapping.yaml` | 将解析出的名称映射为另一个名称 | 只能改名称，不能直接指定 TMDB ID |
-| `tmdb_id_mapping.conf` | 将原始 title/文件名或正则映射到 `type + tmdbid` | 使用完整文件名作为 key，剧集需要用户自己写正则 |
+| `video_name_mapping.yaml` | 持续使用，已有不少历史数据 | 用脚本迁移到 `media_mapping.yaml` |
+| `tmdb_id_mapping.conf` | 未使用能力，无历史数据 | 完全废弃，不迁移，不兼容 |
 
 文件管理页目前只提供“名称映射”按钮，维护的是 `video_name_mapping.yaml`。当用户遇到类似：
 
@@ -22,12 +22,12 @@ Climax.S01E03.1080p.friDay.WEB-DL.AAC2.0.H.264-MWeb.mkv
 Climax.S01E10.1080p.friDay.WEB-DL.AAC2.0.H.264-MWeb.mkv
 ```
 
-如果继续使用 `tmdb_id_mapping.conf` 的原始文件名匹配，用户必须为 10 个文件分别配置，或自己写正则。这不符合“按作品名配置一次，整季自然生效”的使用预期。
+`tmdb_id_mapping.conf` 虽然代码中已有读取能力，但它不是正在使用的历史能力，而且设计上以原始文件名或正则为 key，不适合作为本需求的基础。它应从运行时链路中移除。
 
 本计划改为引入唯一运行时配置源 `media_mapping.yaml`：
 
-- `video_name_mapping.yaml` 只作为历史数据迁移来源。
-- `tmdb_id_mapping.conf` 相关能力彻底废弃，不做迁移。
+- `video_name_mapping.yaml` 只作为历史数据迁移来源，通过显式脚本迁移。
+- `tmdb_id_mapping.conf` 相关能力彻底废弃，不做迁移，不做兼容读取。
 - 运行时识别、刮削、字幕下载等路径只读取 `media_mapping.yaml`。
 
 ## 二、现有链路梳理
@@ -69,9 +69,9 @@ name = Config().get_video_name_mapping(name)
 
 因此当前名称映射发生在“解析文件名得到作品名”之后，“搜索 TMDB”之前。
 
-### 2.3 TMDB ID 映射
+### 2.3 未使用的 TMDB ID 映射
 
-当前 `tmdb_id_mapping.conf` 已存在读取逻辑：
+当前 `tmdb_id_mapping.conf` 代码中存在读取逻辑：
 
 ```text
 name:type:tmdbid
@@ -83,7 +83,7 @@ r:regex:type:tmdbid
 - `Media().get_media_info()` 中使用 `Config().get_tmdb_id_mapping(title)`
 - `Media().get_media_info_on_files()` 中使用 `Config().get_tmdb_id_mapping(file_name)`
 
-这导致剧集场景必须按文件名逐集配置，或者依赖正则。
+这套能力没有历史数据，也不是当前文件管理页持续使用的配置能力。本计划不基于它扩展，不提供迁移，不保留兼容读取。
 
 ### 2.4 刮削链路
 
@@ -244,7 +244,7 @@ climax:
 `video_name_mapping.yaml`：
 
 - 有历史数据。
-- 需要迁移到 `media_mapping.yaml`。
+- 需要通过脚本迁移到 `media_mapping.yaml`。
 - 迁移后运行时不再读取。
 
 迁移规则：
@@ -266,9 +266,8 @@ the_long_season:
 
 - 无历史数据。
 - 不迁移。
-- 相关运行时能力和配置项彻底废弃。
-
-如果用户升级后仍保留 `/config/tmdb_id_mapping.conf`，系统不读取该文件。日志可以输出一次 warning，提示该文件已废弃并建议迁移到 `media_mapping.yaml`。
+- 不提供兼容读取。
+- 相关运行时能力、配置项、内存字段和调用点彻底删除。
 
 ## 四、文件管理页 UI 设计
 
@@ -402,7 +401,6 @@ _media_mapping_mtime = 0
 | `list_media_mapping(self, name=None)` | 返回全部 mapping 或指定 name 的 mapping |
 | `set_media_mapping(self, key, value)` | 校验并保存单条 mapping |
 | `delete_media_mapping(self, key)` | 删除单条 mapping |
-| `migrate_video_name_mapping(self)` | 首次启动时把 `video_name_mapping.yaml` 迁移为 `media_mapping.yaml` |
 
 key 规范化应提取为共享方法：
 
@@ -425,7 +423,7 @@ def normalize_media_mapping_key(self, name):
 }
 ```
 
-兼容迁移后的最小结构：
+迁移后的最小结构：
 
 ```python
 {
@@ -449,33 +447,43 @@ the_long_season:
   tmdbid:
 ```
 
-### 5.3 迁移逻辑
+### 5.3 迁移脚本
 
-启动时执行一次迁移：
-
-条件：
+新增显式迁移脚本：
 
 ```text
-media_mapping.yaml 不存在
-video_name_mapping.yaml 存在
+scripts/migrate_video_name_mapping.py
 ```
 
-行为：
+脚本职责：
 
 1. 读取 `video_name_mapping.yaml`。
 2. 将每个 `key: value` 转成 `key: {title: value}`。
 3. 写入 `media_mapping.yaml`。
-4. 不删除 `video_name_mapping.yaml`。
-5. 输出日志说明迁移完成，后续运行只读取 `media_mapping.yaml`。
+4. 默认不删除 `video_name_mapping.yaml`。
+5. 如果目标 `media_mapping.yaml` 已存在，默认失败并提示用户使用覆盖参数。
 
-如果 `media_mapping.yaml` 已存在：
+脚本参数：
 
-- 不自动合并 `video_name_mapping.yaml`。
-- 避免覆盖用户已经编辑的新配置。
+```text
+--source /config/video_name_mapping.yaml
+--target /config/media_mapping.yaml
+--overwrite
+--dry-run
+```
 
-### 5.4 废弃 tmdb_id_mapping.conf
+默认行为：
 
-移除或停用：
+- `--source` 默认读取 `Config().get_video_name_mapping_file()`。
+- `--target` 默认读取 `Config().get_media_mapping_file()`。
+- 不传 `--overwrite` 时，目标文件存在则退出，避免覆盖新配置。
+- 传 `--dry-run` 时只打印将生成的 YAML，不写文件。
+
+运行时不在 `Config.__init__()` 中自动迁移。迁移是升级步骤，不是应用启动副作用。
+
+### 5.4 删除 tmdb_id_mapping.conf 能力
+
+删除：
 
 ```python
 init_tmdb_id_mapping()
@@ -494,7 +502,7 @@ _tmdb_id_mapping_mtime
 
 同时删除 `Media().get_media_info()` 和 `Media().get_media_info_on_files()` 中对 `Config().get_tmdb_id_mapping(title_or_file_name)` 的调用。
 
-如保守实现不立即删除方法，也必须保证运行时识别链路不再调用它们，并在计划后续清理中删除死代码。
+不保留兼容方法，不保留配置项，不读取 `/config/tmdb_id_mapping.conf`。
 
 ### 5.5 Media 识别链路
 
@@ -632,8 +640,6 @@ type 存在时必须是 movie 或 tv
 
 覆盖：
 
-- `video_name_mapping.yaml` 自动迁移为 `media_mapping.yaml`
-- `media_mapping.yaml` 已存在时不覆盖
 - `get_media_mapping("The Long Season")` 命中 `the_long_season`
 - 保存 `title` only 成功
 - 保存 `title + type` 成功
@@ -642,7 +648,19 @@ type 存在时必须是 movie 或 tv
 - 保存空 `title` 且空 `tmdbid` 失败
 - 删除 mapping 后不再命中
 
-### 7.2 Media 识别测试
+### 7.2 迁移脚本测试
+
+覆盖：
+
+- `video_name_mapping.yaml` 转换为 `media_mapping.yaml`
+- `the_long_season: 漫长的季节` 转换为 `the_long_season: {title: 漫长的季节}`
+- 目标 `media_mapping.yaml` 已存在时默认失败
+- 目标 `media_mapping.yaml` 已存在且传 `--overwrite` 时覆盖
+- 传 `--dry-run` 时输出 YAML 但不写文件
+- 空 source 文件生成空 mapping 或清晰提示
+- source 文件不存在时返回非零退出码和错误信息
+
+### 7.3 Media 识别测试
 
 覆盖：
 
@@ -652,7 +670,7 @@ type 存在时必须是 movie 或 tv
 - `title + type` 命中时使用映射 title 和指定 type 搜索
 - 未命中时保持旧识别行为
 
-### 7.3 Web Action 测试
+### 7.4 Web Action 测试
 
 覆盖：
 
@@ -661,7 +679,7 @@ type 存在时必须是 movie 或 tv
 - `delete_media_mapping`
 - 后端校验错误消息
 
-### 7.4 文件管理页手工验证
+### 7.5 文件管理页手工验证
 
 验证流程：
 
@@ -695,21 +713,24 @@ type 存在时必须是 movie 或 tv
 - [ ] 新增保存时的原子写入逻辑
 - [ ] 编写 Config 测试并通过
 
-### Task 2: 迁移 video_name_mapping.yaml
+### Task 2: 编写 video_name_mapping 迁移脚本
 
 **Files:**
 
-- Modify: `config.py`
-- Test: `tests/test_media_mapping.py`
+- Create: `scripts/migrate_video_name_mapping.py`
+- Test: `tests/test_media_mapping_migration.py`
 
-- [ ] 新增 `migrate_video_name_mapping()`
-- [ ] 在 `Config.__init__()` 中加载 config 后执行迁移
-- [ ] 迁移条件限定为 `media_mapping.yaml` 不存在且 `video_name_mapping.yaml` 存在
-- [ ] 迁移后调用 `init_media_mapping()`
-- [ ] 测试已有 `media_mapping.yaml` 时不会覆盖
-- [ ] 测试历史 `video_name_mapping.yaml` 转换为 `{title: value}`
+- [ ] 新增脚本入口 `scripts/migrate_video_name_mapping.py`
+- [ ] 支持 `--source`
+- [ ] 支持 `--target`
+- [ ] 支持 `--overwrite`
+- [ ] 支持 `--dry-run`
+- [ ] 读取 YAML dict 并转换为 `{title: value}`
+- [ ] 目标文件存在且未传 `--overwrite` 时返回非零退出码
+- [ ] 写入时使用临时文件加 `os.replace()` 原子替换
+- [ ] 编写迁移脚本测试并通过
 
-### Task 3: 废弃 tmdb_id_mapping 运行时链路
+### Task 3: 删除 tmdb_id_mapping 运行时链路
 
 **Files:**
 
@@ -718,10 +739,15 @@ type 存在时必须是 movie 或 tv
 - Test: `tests/test_media_mapping.py`
 
 - [ ] 从 `Config.__init__()` 移除 `init_tmdb_id_mapping()`
+- [ ] 从 `config.py` 删除 `_tmdb_id_mapping`、`_r_tmdb_id_mapping`、`_tmdb_id_mapping_mtime`
+- [ ] 从 `config.py` 删除 `init_tmdb_id_mapping()`
+- [ ] 从 `config.py` 删除 `check_and_reload_tmdb_id_mapping()`
+- [ ] 从 `config.py` 删除 `get_tmdb_id_mapping()`
+- [ ] 从 `config.py` 删除 `get_tmdb_id_mapping_file()`
 - [ ] 从识别链路移除 `Config().get_tmdb_id_mapping(title)`
 - [ ] 从文件识别链路移除 `Config().get_tmdb_id_mapping(file_name)`
+- [ ] 全仓确认没有 `get_tmdb_id_mapping` 调用点
 - [ ] 确认运行时不再读取 `tmdb_id_mapping.conf`
-- [ ] 保留或删除旧方法时，保证没有调用点
 
 ### Task 4: 接入 media_mapping 到 Media 识别
 
@@ -750,7 +776,10 @@ type 存在时必须是 movie 或 tv
 - [ ] 注册 `delete_media_mapping`
 - [ ] 实现后端校验：`tmdbid -> type required`
 - [ ] 实现后端校验：`no tmdbid -> title required`
-- [ ] 保留旧 action 兼容一版或直接移除，并同步前端调用
+- [ ] 移除旧 `get_video_name_mappings`
+- [ ] 移除旧 `set_video_name_mapping`
+- [ ] 移除旧 `delete_video_name_mapping`
+- [ ] 同步前端调用为新 action
 
 ### Task 6: 改造文件管理页媒体映射 UI
 
@@ -777,8 +806,9 @@ type 存在时必须是 movie 或 tv
 - Test: manual verification
 
 - [ ] 记录 `media_mapping.yaml` 示例
-- [ ] 说明 `video_name_mapping.yaml` 会迁移但不再读取
-- [ ] 说明 `tmdb_id_mapping.conf` 已废弃且不迁移
+- [ ] 说明 `video_name_mapping.yaml` 通过脚本迁移但不再运行时读取
+- [ ] 说明 `tmdb_id_mapping.conf` 已废弃、不迁移、不兼容
+- [ ] 记录迁移脚本用法和 `--dry-run` 示例
 - [ ] 跑单元测试
 - [ ] 手工验证文件管理页识别和刮削
 
@@ -800,12 +830,12 @@ tmdbid 存在时 type 必填
 决策：
 
 ```text
-不保留，不迁移，运行时彻底废弃。
+不保留，不迁移，不兼容，运行时彻底删除。
 ```
 
 原因：
 
-- 当前没有历史数据。
+- 这是未使用能力，没有历史数据。
 - 它的 key 是原始文件名/正则，不符合作品级映射心智。
 - 保留会形成三套配置并存。
 
@@ -814,12 +844,13 @@ tmdbid 存在时 type 必填
 决策：
 
 ```text
-只迁移，不运行时读取。
+用显式脚本迁移，不运行时读取。
 ```
 
 原因：
 
 - 它有历史数据，必须保护用户已有配置。
+- 迁移是升级动作，应由脚本显式执行，避免应用启动时产生文件写入副作用。
 - 迁移后若继续读取，会造成优先级混乱。
 
 ### 9.4 是否把 media_mapping 写回 video_name_mapping.yaml
@@ -838,8 +869,8 @@ tmdbid 存在时 type 必填
 ## 十、完成标准
 
 - `media_mapping.yaml` 成为唯一运行时映射配置。
-- 历史 `video_name_mapping.yaml` 可自动迁移。
-- `tmdb_id_mapping.conf` 不再参与识别。
+- 历史 `video_name_mapping.yaml` 可通过脚本迁移。
+- `tmdb_id_mapping.conf` 相关代码被删除，不再参与识别。
 - 文件管理页“媒体映射”可同时配置 `title`、`type`、`tmdbid`。
 - UI 和后端都强制执行：有 `tmdbid` 时 `type` 必填。
 - `Climax.S01E01` 到 `S01E10` 只需配置一次 `climax` 即可全部命中同一个 TMDB ID。
