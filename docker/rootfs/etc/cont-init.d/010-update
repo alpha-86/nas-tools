@@ -142,7 +142,7 @@ function requirements_update {
             # Alpine 构建依赖（与 Dockerfile 的 .build-deps 保持一致）
             apk add --no-cache --virtual .update-build-deps \
                 python3-dev libffi-dev gcc musl-dev \
-                libxml2-dev libxslt-dev linux-headers
+                libxml2-dev libxslt-dev linux-headers openssl-dev cargo
             build_deps_status=$?
         fi
 
@@ -154,12 +154,14 @@ function requirements_update {
         if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
             /opt/venv/bin/pip install --upgrade pip wheel -i "${PYPI_MIRROR}"
             /opt/venv/bin/pip install "setuptools<82" -i "${PYPI_MIRROR}"
-            /opt/venv/bin/pip install -r requirements.txt -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install cython hatchling -i "${PYPI_MIRROR}"
+            /opt/venv/bin/pip install --no-build-isolation -r requirements.txt -i "${PYPI_MIRROR}"
             install_status=$?
         else
             /opt/venv/bin/pip install --upgrade pip wheel
             /opt/venv/bin/pip install "setuptools<82"
-            /opt/venv/bin/pip install -r requirements.txt
+            /opt/venv/bin/pip install cython hatchling
+            /opt/venv/bin/pip install --no-build-isolation -r requirements.txt
             install_status=$?
         fi
 

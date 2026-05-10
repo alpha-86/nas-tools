@@ -1214,7 +1214,7 @@ class WebAction:
             os.system(f"sudo git reset --hard origin/{branch}")
             os.system("sudo git submodule update --init --recursive")
             # 安装依赖（venv 内 pip）
-            os.system('sudo /opt/venv/bin/pip install -r /nas-tools/requirements.txt')
+            os.system('sudo /opt/venv/bin/pip install -r /nas-tools/requirements.txt --no-build-isolation')
             # 修复权限
             os.system('sudo chown -R nt:nt /nas-tools')
             # 重启
