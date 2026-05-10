@@ -113,10 +113,23 @@ function requirements_update {
     if [ "${hash_old}" != "${hash_new}" ]; then
         echo "检测到requirements.txt有变化，重新安装依赖..."
 
-        # 安装构建依赖（与 Dockerfile 的 .build-deps 保持一致）
-        apk add --no-cache --virtual .update-build-deps \
-            python3-dev libffi-dev gcc musl-dev \
-            libxml2-dev libxslt-dev linux-headers
+        is_debian=false
+        if grep -Eqi "Debian" /etc/issue 2>/dev/null || grep -Eq "Debian" /etc/os-release 2>/dev/null; then
+            is_debian=true
+        fi
+
+        if [ "${is_debian}" = "true" ]; then
+            # Debian 构建依赖
+            DEBIAN_FRONTEND="noninteractive"
+            apt-get update -y
+            apt-get install -y python3-dev libffi-dev gcc musl-dev \
+                libxml2-dev libxslt-dev linux-headers-amd64 || true
+        else
+            # Alpine 构建依赖（与 Dockerfile 的 .build-deps 保持一致）
+            apk add --no-cache --virtual .update-build-deps \
+                python3-dev libffi-dev gcc musl-dev \
+                libxml2-dev libxslt-dev linux-headers
+        fi
 
         if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
             package_cn
@@ -133,8 +146,12 @@ function requirements_update {
             install_status=$?
         fi
 
-        # 清理构建依赖，避免镜像膨胀
-        apk del --purge .update-build-deps
+        # 清理构建依赖
+        if [ "${is_debian}" = "true" ]; then
+            apt-get autoremove -y 2>/dev/null || true
+        else
+            apk del --purge .update-build-deps 2>/dev/null || true
+        fi
 
         # 检查 pip install 结果（必须在清理后，用保存的状态）
         if [ "${install_status}" -ne 0 ]; then
