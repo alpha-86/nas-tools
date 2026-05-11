@@ -58,6 +58,10 @@ class MediaMappingTest(unittest.TestCase):
         self.assertEqual(cfg.normalize_media_mapping_key("The Long Season"), "the_long_season")
         self.assertEqual(cfg.normalize_media_mapping_key("Climax"), "climax")
         self.assertEqual(cfg.normalize_media_mapping_key("漫长的季节"), "漫长的季节")
+        # 去掉英文标点（? ! ' "）
+        self.assertEqual(cfg.normalize_media_mapping_key("Can This Love Be Translated?"), "can_this_love_be_translated")
+        self.assertEqual(cfg.normalize_media_mapping_key("Howl's Moving Castle"), "howls_moving_castle")
+        self.assertEqual(cfg.normalize_media_mapping_key('Hello! World'), "hello_world")
 
     def test_get_media_mapping_key_normalization(self):
         """get_media_mapping 应当通过规范化 key 命中"""

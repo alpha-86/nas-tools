@@ -151,6 +151,8 @@ class Config(object):
     def normalize_media_mapping_key(name):
         if not name:
             return name
+        # 去掉常见英文标点，避免 key 不匹配（如 Can This Love Be Translated? -> can_this_love_be_translated?）
+        name = name.replace('?', '').replace('!', '').replace("'", '').replace('"', '')
         return name.replace(' ', '_').lower()
 
     def get_media_mapping_file(self):
