@@ -736,19 +736,18 @@ class Media:
         if not meta_info.get_name() or not meta_info.type:
             log.warn("【Rmt】%s 未识别出有效信息！" % meta_info.org_string)
             return None
+        # 应用 media_mapping
+        mapping, mapped_tmdb_info = self.__apply_media_mapping(meta_info,
+                                                                  chinese=chinese,
+                                                                  append_to_response=append_to_response)
+        # tmdbid+type 直接命中时直接返回
+        if mapped_tmdb_info:
+            meta_info.set_tmdb_info(mapped_tmdb_info)
+            return meta_info
         if mtype:
             meta_info.type = mtype
         media_key = self.__make_cache_key(meta_info)
-        tmdb_id = Config().get_tmdb_id_mapping(title)
-        if tmdb_id:
-            media_type, tmdb_id = tmdb_id
-            log.info("【Meta】func[get_media_info]get_tmdb_id_mapping：[%s][%s]" % (tmdb_id, title))
-            media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
-            file_media_info = self.get_tmdb_info(mtype=media_type,
-                                                     tmdbid=tmdb_id,
-                                                     chinese=chinese,
-                                                     append_to_response=append_to_response)
-        elif not cache or not self.meta.get_meta_data_by_key(media_key):
+        if not cache or not self.meta.get_meta_data_by_key(media_key):
             # 缓存没有或者强制不使用缓存
             if meta_info.type != MediaType.TV and not meta_info.year:
                 file_media_info = self.__search_multi_tmdb(file_media_name=meta_info.get_name())
@@ -831,6 +830,47 @@ class Media:
         # 赋值TMDB信息并返回
         meta_info.set_tmdb_info(file_media_info)
         return meta_info
+
+    def __apply_media_mapping(self, meta_info, chinese=None, append_to_response=None):
+        """
+        查询 media_mapping 并应用映射。
+        返回 (mapping, tmdb_info)：
+          - mapping: dict 或 None（未命中时 None）
+          - tmdb_info: tmdbid+type 直接命中时返回 TMDB 详情，否则 None
+        """
+        mapping = Config().get_media_mapping(meta_info.raw_name or meta_info.get_name())
+        if not mapping:
+            return None, None
+
+        media_type = mapping.get("type")
+        tmdbid = mapping.get("tmdbid")
+        mapped_title = mapping.get("title")
+
+        if tmdbid and media_type:
+            # tmdbid + type 命中：直接查询 TMDB 详情，跳过搜索
+            log.info("【Meta】func[__apply_media_mapping]media_mapping tmdbid命中：[%s][%s]" % (tmdbid, meta_info.raw_name))
+            mtype = MediaType.MOVIE if media_type == "movie" else MediaType.TV
+            tmdb_info = self.get_tmdb_info(mtype=mtype, tmdbid=tmdbid,
+                                            chinese=chinese,
+                                            append_to_response=append_to_response)
+            return mapping, tmdb_info
+
+        if mapped_title:
+            # title 命中：覆盖 meta_info 的搜索名称
+            log.info("【Meta】func[__apply_media_mapping]media_mapping title命中：[%s]->[%s]" % (meta_info.get_name(), mapped_title))
+            # 根据当前 get_name() 优先级覆盖对应字段
+            if meta_info.cn_name and StringUtils.is_all_chinese(meta_info.cn_name):
+                meta_info.cn_name = mapped_title
+            elif meta_info.en_name:
+                meta_info.en_name = mapped_title
+            else:
+                meta_info.cn_name = mapped_title
+
+        if media_type and not tmdbid:
+            # type 命中（无 tmdbid）：覆盖媒体类型
+            meta_info.type = MediaType.MOVIE if media_type == "movie" else MediaType.TV
+
+        return mapping, None
 
     def __insert_media_cache(self, media_key, file_media_info):
         """
@@ -936,18 +976,18 @@ class Media:
                     if not meta_info.get_name() or not meta_info.type:
                         log.warn("【Rmt】%s 未识别出有效信息！" % meta_info.org_string)
                         continue
+                    # 应用 media_mapping
+                    mapping, mapped_tmdb_info = self.__apply_media_mapping(meta_info,
+                                                                              chinese=chinese,
+                                                                              append_to_response=append_to_response)
+                    if mapped_tmdb_info:
+                        # tmdbid+type 直接命中，跳过缓存/搜索
+                        meta_info.set_tmdb_info(mapped_tmdb_info)
+                        return_media_infos[file_path] = meta_info
+                        continue
                     # 区配缓存及TMDB
                     media_key = self.__make_cache_key(meta_info)
-                    tmdb_id = Config().get_tmdb_id_mapping(file_name)
-                    if tmdb_id:
-                        media_type, tmdb_id = tmdb_id
-                        log.info("【Meta】func[get_media_info_on_files]get_tmdb_id_mapping：[%s][%s]" % (tmdb_id, file_name))
-                        media_type = MediaType.MOVIE if media_type == "movie" else MediaType.TV if media_type == "tv" else media_type
-                        file_media_info = self.get_tmdb_info(mtype=media_type,
-                                                             tmdbid=tmdb_id,
-                                                             chinese=chinese,
-                                                             append_to_response=append_to_response)
-                    elif not self.meta.get_meta_data_by_key(media_key):
+                    if not self.meta.get_meta_data_by_key(media_key):
                         # 没有缓存数据
                         file_media_info = self.__search_tmdb(file_media_name=meta_info.get_name(),
                                                              first_media_year=meta_info.year,

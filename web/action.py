@@ -104,9 +104,9 @@ class WebAction:
             "brushtask_detail": self.__brushtask_detail,
             "update_brushtask_state": self.__update_brushtask_state,
             "name_test": self.__name_test,
-            "get_video_name_mappings": self.__get_video_name_mappings,
-            "set_video_name_mapping": self.__set_video_name_mapping,
-            "delete_video_name_mapping": self.__delete_video_name_mapping,
+            "get_media_mappings": self.__get_media_mappings,
+            "set_media_mapping": self.__set_media_mapping,
+            "delete_media_mapping": self.__delete_media_mapping,
             "rule_test": self.__rule_test,
             "net_test": self.__net_test,
             "add_filtergroup": self.__add_filtergroup,
@@ -5140,28 +5140,47 @@ class WebAction:
         return {"code": 0, "result": result}
 
     @staticmethod
-    def __get_video_name_mappings(data):
-        result = Config().list_video_name_mapping(data.get("name"))
+    def __get_media_mappings(data):
+        result = Config().list_media_mapping(data.get("name"))
         return {"code": 0, "data": result}
 
     @staticmethod
-    def __set_video_name_mapping(data):
-        key, value = data.get("key"), data.get("value")
-        if not key or not value:
-            return {"code": 1, "msg": "原始名称和映射名称不能为空"}
+    def __set_media_mapping(data):
+        key = data.get("key")
+        title = data.get("title")
+        media_type = data.get("type")
+        tmdbid = data.get("tmdbid")
+        if not key:
+            return {"code": 1, "msg": "原始名称不能为空"}
         try:
-            Config().set_video_name_mapping(key, value)
+            result = Config().set_media_mapping(key, {
+                "title": title,
+                "type": media_type,
+                "tmdbid": tmdbid
+            })
+            if not result:
+                return {"code": 1, "msg": "保存失败：填写TMDB ID时必须选择媒体类型，未填写TMDB ID时必须填写映射名称"}
             return {"code": 0, "msg": "保存成功"}
         except Exception as e:
             return {"code": 1, "msg": str(e)}
 
     @staticmethod
-    def __delete_video_name_mapping(data):
+    def __delete_media_mapping(data):
         key = data.get("key")
         if not key:
             return {"code": 1, "msg": "原始名称不能为空"}
         try:
-            Config().delete_video_name_mapping(key)
+            Config().delete_media_mapping(key)
+            # 清除对应的 meta cache，避免重新识别返回旧结果
+            from app.media.media import Media
+            media_key = Config().normalize_media_mapping_key(key)
+            meta = Media().meta
+            if meta:
+                for cache_key in list(meta._meta_data.keys()):
+                    if cache_key.lower().replace(' ', '_') == media_key:
+                        meta.delete_meta_data(cache_key)
+                        meta.save_meta_data()
+                        break
             return {"code": 0, "msg": "删除成功"}
         except Exception as e:
             return {"code": 1, "msg": str(e)}
