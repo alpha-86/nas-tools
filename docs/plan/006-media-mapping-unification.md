@@ -151,9 +151,23 @@ test_movie:
 |---|---|---:|---|
 | `title` | string | 条件必填 | 映射后的搜索名称；当没有 `tmdbid` 时必填 |
 | `type` | string | 条件必填 | `movie` 或 `tv`；当存在 `tmdbid` 时必填 |
-| `tmdbid` | int/string | 否 | TMDB 媒体 ID；存在时直接查询 TMDB 详情 |
+| `tmdbid` | int/string | 否 | TMDB 媒体 ID；存在时直接查询 TMDB 详情；YAML 中可写 int 或 string，运行时统一转为 int 后调用 TMDB API |
 
-### 3.3 校验规则
+### 3.3 tmdbid 类型处理
+
+YAML 中 `tmdbid` 可以写 int 或 string：
+
+```yaml
+climax:
+  tmdbid: 241860       # int
+
+the_long_season:
+  tmdbid: "241860"     # string
+```
+
+运行时在 `Config().get_media_mapping()` 返回时统一转为 int，保证 `get_tmdb_info(mtype=, tmdbid=)` 接收一致的类型。`set_media_mapping()` 保存时写入 int。
+
+### 3.4 校验规则
 
 核心规则：
 
@@ -172,7 +186,7 @@ type 存在时只能是 movie 或 tv
 
 因此只靠 `tmdbid` 无法可靠判断应该调用 movie 还是 tv。配置中一旦指定 `tmdbid`，必须同时保存 `type`。
 
-### 3.4 key 规则
+### 3.5 key 规则
 
 `media_mapping.yaml` 的 key 沿用当前 `video_name_mapping.yaml` 的规范：
 
@@ -214,7 +228,7 @@ climax:
 
 同一季的 `S01E01` 到 `S01E10` 都自然生效，不需要正则。
 
-### 3.5 运行时优先级
+### 3.6 运行时优先级
 
 统一后的运行时优先级：
 
@@ -239,7 +253,7 @@ climax:
 - `tmdbid + type` 用于运行时识别。
 - `title` 只用于 UI 展示、人工辨识和未来回退场景。
 
-### 3.6 与旧配置的关系
+### 3.7 与旧配置的关系
 
 `video_name_mapping.yaml`：
 
@@ -374,6 +388,8 @@ tv：电视剧
 
 删除映射时使用原始名称 `raw_name` 作为 key 删除。
 
+删除成功后必须清除相关缓存，否则 `get_media_info` 的缓存（`self.meta.get_meta_data_by_key(media_key)`）可能返回旧的映射结果。后端 `delete_media_mapping` action 应在删除后主动调用 `self.meta.delete_meta_data_by_key(media_key)` 或使用 `cache=False` 参数重新识别。
+
 删除成功后：
 
 - 自动重新识别当前文件。
@@ -396,11 +412,13 @@ _media_mapping_mtime = 0
 |---|---|
 | `init_media_mapping(self)` | 从 `media_mapping.yaml` 加载 `_media_mapping` 并记录 mtime |
 | `check_and_reload_media_mapping(self)` | 文件不存在时清空内存映射，mtime 变化时重新加载 |
-| `get_media_mapping_file(self)` | 返回 `app.media_mapping_file` 或默认 `/config/media_mapping.yaml` |
-| `get_media_mapping(self, name)` | 按规范化 key 返回单条 mapping |
+| `get_media_mapping_file(self)` | 返回 `app.media_mapping_file` 或默认 `/config/media_mapping.yaml`；支持相对路径（与 `get_video_name_mapping_file` 一致，拼接 config 目录） |
+| `get_media_mapping(self, name)` | 按规范化 key 返回单条 mapping；tmdbid 统一转为 int |
 | `list_media_mapping(self, name=None)` | 返回全部 mapping 或指定 name 的 mapping |
-| `set_media_mapping(self, key, value)` | 校验并保存单条 mapping |
-| `delete_media_mapping(self, key)` | 删除单条 mapping |
+| `set_media_mapping(self, key, value)` | 校验并保存单条 mapping；使用 `lock` 保证线程安全 |
+| `delete_media_mapping(self, key)` | 删除单条 mapping；使用 `lock` 保证线程安全 |
+
+线程安全：`set_media_mapping`、`delete_media_mapping`、`_save_media_mapping` 必须使用 `lock`（与现有 `video_name_mapping` 一致的 RLock 机制），防止并发读写导致数据丢失。
 
 key 规范化应提取为共享方法：
 
@@ -462,6 +480,8 @@ scripts/migrate_video_name_mapping.py
 3. 写入 `media_mapping.yaml`。
 4. 默认不删除 `video_name_mapping.yaml`。
 5. 如果目标 `media_mapping.yaml` 已存在，默认失败并提示用户使用覆盖参数。
+6. source 文件不存在时返回非零退出码和错误信息。
+7. source 文件为空时（空 dict 或空文件）打印提示信息并以 0 退出，不写入目标文件。
 
 脚本参数：
 
@@ -504,7 +524,34 @@ _tmdb_id_mapping_mtime
 
 不保留兼容方法，不保留配置项，不读取 `/config/tmdb_id_mapping.conf`。
 
-### 5.5 Media 识别链路
+### 5.5 `__fix_name` 中 mapping 调用的处置
+
+**决策：移除 `__fix_name` 中的 `get_video_name_mapping` 调用，mapping 统一在 `get_media_info` 层面处理。**
+
+当前 `metavideo.py:177`：
+
+```python
+name = Config().get_video_name_mapping(name)
+```
+
+在 `__fix_name` 中直接替换了 `cn_name` / `en_name`，导致 `get_name()` 和 `raw_name` 返回的是映射后的名称。
+
+改为：
+
+```python
+# 移除该行，__fix_name 只做清洗，不做映射
+```
+
+影响分析：
+
+- `meta_info.get_name()` 将返回**清洗后但未映射**的原始名称（如 `Climax` 而非映射后的名称）
+- `meta_info.raw_name` 不受影响（它来自 `__normalize_mapping_name`，不经过 `get_video_name_mapping`）
+- 下游的 `__make_cache_key(meta_info)` 使用 `get_name()` 构造缓存 key，key 会变化——但这不是问题，因为新 mapping 在 `get_media_info` 层面生效，与缓存 key 无关
+- `meta_info.type` 不受影响
+
+这是必要的架构变更：mapping 从"名称清洗阶段"提升到"识别阶段"，才能同时支持 `title`、`type`、`tmdbid` 三种映射行为。
+
+### 5.6 Media 识别链路
 
 `Media().get_media_info()` 的目标流程：
 
@@ -523,15 +570,45 @@ MetaInfo(title, subtitle)
 为了避免名称覆盖逻辑散落，建议在 `app/media/media.py` 中新增私有辅助方法：
 
 ```python
-def __apply_media_mapping(self, meta_info):
+def __apply_media_mapping(self, meta_info, chinese=None, append_to_response=None):
+    """
+    查询 media_mapping 并应用映射。
+    返回 (mapping, tmdb_info)：
+      - mapping: dict 或 None（未命中时 None）
+      - tmdb_info: tmdbid+type 直接命中时返回 TMDB 详情，否则 None
+    """
     mapping = Config().get_media_mapping(meta_info.raw_name or meta_info.get_name())
     if not mapping:
         return None, None
+
     media_type = mapping.get("type")
     tmdbid = mapping.get("tmdbid")
-    if tmdbid:
-        mapped_tmdb_info = self.get_tmdb_info(mtype=media_type, tmdbid=tmdbid)
-        return mapping, mapped_tmdb_info
+    mapped_title = mapping.get("title")
+
+    if tmdbid and media_type:
+        # tmdbid + type 命中：直接查询 TMDB 详情，跳过搜索
+        log.info("【Meta】func[__apply_media_mapping]media_mapping tmdbid命中：[%s][%s]" % (tmdbid, meta_info.raw_name))
+        mtype = MediaType.MOVIE if media_type == "movie" else MediaType.TV
+        tmdb_info = self.get_tmdb_info(mtype=mtype, tmdbid=tmdbid,
+                                        chinese=chinese,
+                                        append_to_response=append_to_response)
+        return mapping, tmdb_info
+
+    if mapped_title:
+        # title 命中：覆盖 meta_info 的搜索名称
+        log.info("【Meta】func[__apply_media_mapping]media_mapping title命中：[%s]->[%s]" % (meta_info.get_name(), mapped_title))
+        # 根据当前 get_name() 优先级覆盖对应字段
+        if meta_info.cn_name and StringUtils.is_all_chinese(meta_info.cn_name):
+            meta_info.cn_name = mapped_title
+        elif meta_info.en_name:
+            meta_info.en_name = mapped_title
+        else:
+            meta_info.cn_name = mapped_title
+
+    if media_type and not tmdbid:
+        # type 命中（无 tmdbid）：覆盖媒体类型
+        meta_info.type = MediaType.MOVIE if media_type == "movie" else MediaType.TV
+
     return mapping, None
 ```
 
@@ -539,6 +616,25 @@ def __apply_media_mapping(self, meta_info):
 
 - `mapping` 用于 title/type 覆盖。
 - `mapped_tmdb_info` 用于 `tmdbid + type` 直接命中的场景。
+- `tmdbid + type` 命中时，日志记录与现有 `get_tmdb_id_mapping` 命中行为一致。
+- `title` 覆盖逻辑与旧 `__fix_name` 中 `get_video_name_mapping` 的效果等价，但只修改用于搜索的名称字段，不影响 `raw_name`。
+
+### 5.7 `get_media_info()` 整合流程
+
+替换现有 `get_tmdb_id_mapping` 调用后的完整流程：
+
+```text
+meta_info = MetaInfo(title, subtitle)
+    -> 移除 __fix_name 中的 get_video_name_mapping
+    -> raw_name / get_name() 返回清洗后未映射的名称
+    -> Config().get_media_mapping(raw_name)
+        -> tmdbid + type：__apply_media_mapping 返回 tmdb_info，直接使用
+        -> title/type：__apply_media_mapping 修改 meta_info 后，进入正常搜索
+        -> 无 mapping：跳过，进入正常搜索
+    -> 搜索/缓存逻辑保持不变
+```
+
+`get_media_info_on_files()` 流程相同，但 key 来自 `meta_info.raw_name`，不再使用 `file_name`（完整文件名）。
 
 ## 六、Action 接口设计
 
@@ -699,18 +795,22 @@ type 存在时必须是 movie 或 tv
 **Files:**
 
 - Modify: `config.py`
+- Modify: `config/config.yaml`
 - Test: `tests/test_media_mapping.py`
 
 - [ ] 新增 `_media_mapping`、`_media_mapping_mtime`
-- [ ] 新增 `get_media_mapping_file()`
+- [ ] 新增 `get_media_mapping_file()`（支持相对路径拼接，与 `get_video_name_mapping_file` 一致）
 - [ ] 新增 `normalize_media_mapping_key()`
 - [ ] 新增 `init_media_mapping()`
 - [ ] 新增 `check_and_reload_media_mapping()`
-- [ ] 新增 `get_media_mapping()`
+- [ ] 新增 `get_media_mapping()`（tmdbid 统一转 int）
 - [ ] 新增 `list_media_mapping()`
-- [ ] 新增 `set_media_mapping()`
-- [ ] 新增 `delete_media_mapping()`
-- [ ] 新增保存时的原子写入逻辑
+- [ ] 新增 `set_media_mapping()`（使用 `lock` 保证线程安全）
+- [ ] 新增 `delete_media_mapping()`（使用 `lock` 保证线程安全）
+- [ ] 新增 `_save_media_mapping()` 原子写入逻辑
+- [ ] 在 `config/config.yaml` 中新增 `media_mapping_file: /config/media_mapping.yaml`
+- [ ] 在 `config/config.yaml` 中注释或标记 `video_name_mapping_file` 为废弃
+- [ ] 在 `Config.__init__()` 中新增 `self.init_media_mapping()`
 - [ ] 编写 Config 测试并通过
 
 ### Task 2: 编写 video_name_mapping 迁移脚本
@@ -754,11 +854,15 @@ type 存在时必须是 movie 或 tv
 **Files:**
 
 - Modify: `app/media/media.py`
-- Modify: `app/media/meta/metavideo.py` if needed
+- Modify: `app/media/meta/metavideo.py`
 - Test: `tests/test_media_mapping.py`
 
-- [ ] 在 `get_media_info()` 中用解析后的 raw name 查询 `media_mapping`
-- [ ] 在 `get_media_info_on_files()` 中用解析后的 raw name 查询 `media_mapping`
+- [ ] 从 `metavideo.py:__fix_name()` 中**移除** `Config().get_video_name_mapping(name)` 调用
+- [ ] 确认移除后 `meta_info.get_name()` 返回清洗后未映射的名称
+- [ ] 确认 `meta_info.raw_name` 不受 `__fix_name` 移除影响（它来自 `__normalize_mapping_name`）
+- [ ] 在 `get_media_info()` 中移除 `Config().get_tmdb_id_mapping(title)` 调用，替换为 `__apply_media_mapping()`
+- [ ] 在 `get_media_info_on_files()` 中移除 `Config().get_tmdb_id_mapping(file_name)` 调用，替换为 `__apply_media_mapping()`，key 使用 `meta_info.raw_name`
+- [ ] 验证 `get_media_info_on_files()` 中 MetaInfo 构造路径与 `get_media_info()` 一致，`raw_name` 可靠设置
 - [ ] `tmdbid + type` 命中时直接调用 `get_tmdb_info`
 - [ ] `title` 命中时覆盖搜索名称
 - [ ] `type` 命中时覆盖或补充媒体类型
@@ -774,12 +878,16 @@ type 存在时必须是 movie 或 tv
 - [ ] 注册 `get_media_mappings`
 - [ ] 注册 `set_media_mapping`
 - [ ] 注册 `delete_media_mapping`
+- [ ] 实现 `__get_media_mappings(data)`：调用 `Config().list_media_mapping()`
+- [ ] 实现 `__set_media_mapping(data)`：后端校验 + 调用 `Config().set_media_mapping()`
+- [ ] 实现 `__delete_media_mapping(data)`：调用 `Config().delete_media_mapping()`
 - [ ] 实现后端校验：`tmdbid -> type required`
 - [ ] 实现后端校验：`no tmdbid -> title required`
-- [ ] 移除旧 `get_video_name_mappings`
-- [ ] 移除旧 `set_video_name_mapping`
-- [ ] 移除旧 `delete_video_name_mapping`
-- [ ] 同步前端调用为新 action
+- [ ] 实现后端校验：`type 存在时只能是 movie 或 tv`
+- [ ] 移除旧 `get_video_name_mappings` 注册和 `__get_video_name_mappings` 方法
+- [ ] 移除旧 `set_video_name_mapping` 注册和 `__set_video_name_mapping` 方法
+- [ ] 移除旧 `delete_video_name_mapping` 注册和 `__delete_video_name_mapping` 方法
+- [ ] 同步前端 JS 调用为新 action（`mediafile.html` 中 3 处 `ajax_post`）
 
 ### Task 6: 改造文件管理页媒体映射 UI
 
@@ -865,6 +973,34 @@ tmdbid 存在时 type 必填
 
 - `media_mapping.yaml` 是新唯一源。
 - 双写会引入一致性问题。
+
+### 9.5 `__fix_name` 中 mapping 调用是否移除
+
+决策：
+
+```text
+移除。mapping 从名称清洗阶段提升到识别阶段。
+```
+
+原因：
+
+- 在 `__fix_name` 中调用 mapping 只能做名称替换，无法支持 `type` 和 `tmdbid` 映射。
+- 移除后 `meta_info.get_name()` 返回清洗后未映射的名称，`raw_name` 不受影响。
+- mapping 统一在 `get_media_info()` 层面处理，可以同时支持 `title`、`type`、`tmdbid` 三种映射行为。
+
+### 9.6 删除映射后是否需要清除缓存
+
+决策：
+
+```text
+需要。删除映射后必须清除对应的 meta cache，否则重新识别会返回旧结果。
+```
+
+原因：
+
+- `get_media_info()` 使用 `self.meta.get_meta_data_by_key(media_key)` 缓存。
+- 删除 mapping 后如果不清缓存，同名的识别结果不会改变。
+- 后端 `delete_media_mapping` action 应在删除后主动清除相关缓存。
 
 ## 十、完成标准
 
