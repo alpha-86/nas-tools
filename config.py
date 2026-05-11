@@ -3,7 +3,6 @@ import shutil
 import sys
 import threading
 import ruamel.yaml
-import re
 
 # 种子名/文件名要素分隔字符
 SPLIT_CHARS = r"\.|\s+|\(|\)|\[|]|-|\+|【|】|/|～|;|&|\||#|_|「|」|~"
@@ -102,11 +101,8 @@ class Config(object):
     _config = {}
     _config_path = None
     _user = None
-    _video_name_mapping = {}
-    _video_name_mapping_mtime=0
-    _tmdb_id_mapping = {}
-    _r_tmdb_id_mapping = {}
-    _tmdb_id_mapping_mtime=0
+    _media_mapping = {}
+    _media_mapping_mtime = 0
 
     def __init__(self):
         self._config_path = os.environ.get('NASTOOL_CONFIG')
@@ -114,8 +110,7 @@ class Config(object):
             os.environ['TZ'] = 'Asia/Shanghai'
         self.init_syspath()
         self.init_config()
-        self.init_video_name_mapping()
-        self.init_tmdb_id_mapping()
+        self.init_media_mapping()
 
     def init_config(self):
         try:
@@ -150,133 +145,148 @@ class Config(object):
                 if module_path not in sys.path:
                     sys.path.append(module_path)
 
-    def init_video_name_mapping(self):
-        mapping_config_file = self.get_video_name_mapping_file()
-        self._video_name_mapping={}
+    # ---- media_mapping ----
+
+    @staticmethod
+    def normalize_media_mapping_key(name):
+        if not name:
+            return name
+        return name.replace(' ', '_').lower()
+
+    def get_media_mapping_file(self):
+        file_name = self.get_config("app").get("media_mapping_file")
+        if not file_name:
+            file_name = "/config/media_mapping.yaml"
+        if not os.path.isabs(file_name):
+            file_name = os.path.join(os.path.dirname(self._config_path), file_name)
+        return file_name
+
+    def init_media_mapping(self):
+        mapping_config_file = self.get_media_mapping_file()
+        self._media_mapping = {}
+        self._media_mapping_mtime = 0
         if not os.path.exists(mapping_config_file):
             return
         with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
             try:
-                # 读取配置
-                self._video_name_mapping = ruamel.yaml.YAML().load(cf) or {}
-                self._video_name_mapping_mtime=os.path.getmtime(mapping_config_file)
+                self._media_mapping = ruamel.yaml.YAML().load(cf) or {}
+                self._media_mapping_mtime = os.path.getmtime(mapping_config_file)
             except Exception as e:
                 print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
-                self._video_name_mapping={}
-        return
+                self._media_mapping = {}
 
-    def check_and_reload_video_name_mapping(self):
-        mapping_config_file = self.get_video_name_mapping_file()
+    def check_and_reload_media_mapping(self):
+        mapping_config_file = self.get_media_mapping_file()
         if not os.path.exists(mapping_config_file):
-            self._video_name_mapping = {}
-            self._video_name_mapping_mtime = 0
+            self._media_mapping = {}
+            self._media_mapping_mtime = 0
             return
         now_mtime = os.path.getmtime(mapping_config_file)
-        if now_mtime > self._video_name_mapping_mtime:
-            self.init_video_name_mapping()
+        if now_mtime > self._media_mapping_mtime:
+            self.init_media_mapping()
 
-    def get_video_name_mapping(self, name):
+    def get_media_mapping(self, name):
         if not name:
-            return name
+            return None
         with lock:
-            self.check_and_reload_video_name_mapping()
-            key_name = name.replace(' ', '_').lower()
-            return self._video_name_mapping.get(key_name, name)
+            self.check_and_reload_media_mapping()
+            key_name = self.normalize_media_mapping_key(name)
+            mapping = self._media_mapping.get(key_name)
+            if not mapping:
+                return None
+            # 返回副本，避免外部修改影响内部存储
+            result = dict(mapping)
+            # tmdbid 统一转为 int
+            if "tmdbid" in result and result["tmdbid"] is not None:
+                try:
+                    result["tmdbid"] = int(result["tmdbid"])
+                except (ValueError, TypeError):
+                    pass
+            return result
 
-    def _save_video_name_mapping(self):
+    def list_media_mapping(self, name=None):
+        with lock:
+            self.check_and_reload_media_mapping()
+            if name:
+                key_name = self.normalize_media_mapping_key(name)
+                if key_name in self._media_mapping:
+                    mapping = dict(self._media_mapping[key_name])
+                    if "tmdbid" in mapping and mapping["tmdbid"] is not None:
+                        try:
+                            mapping["tmdbid"] = int(mapping["tmdbid"])
+                        except (ValueError, TypeError):
+                            pass
+                    return {key_name: mapping}
+                return {}
+            result = {}
+            for k, v in self._media_mapping.items():
+                mapping = dict(v)
+                if "tmdbid" in mapping and mapping["tmdbid"] is not None:
+                    try:
+                        mapping["tmdbid"] = int(mapping["tmdbid"])
+                    except (ValueError, TypeError):
+                        pass
+                result[k] = mapping
+            return result
+
+    def _save_media_mapping(self):
         """内部方法，调用方必须已持有 lock"""
-        mapping_config_file = self.get_video_name_mapping_file()
+        mapping_config_file = self.get_media_mapping_file()
         os.makedirs(os.path.dirname(mapping_config_file), exist_ok=True)
         tmp = mapping_config_file + '.tmp'
         with open(tmp, mode='w', encoding='utf-8') as sf:
-            ruamel.yaml.YAML().dump(self._video_name_mapping, sf)
+            ruamel.yaml.YAML().dump(self._media_mapping, sf)
         os.replace(tmp, mapping_config_file)
-        self._video_name_mapping_mtime = os.path.getmtime(mapping_config_file)
+        self._media_mapping_mtime = os.path.getmtime(mapping_config_file)
 
-    def set_video_name_mapping(self, key, value):
-        if not key or not value:
-            return
+    def set_media_mapping(self, key, value):
+        if not key:
+            return False
+        if not value:
+            return False
+        title = str(value.get("title") or "").strip()
+        media_type = str(value.get("type") or "").strip()
+        tmdbid_raw = value.get("tmdbid")
+        tmdbid = str(tmdbid_raw).strip() if tmdbid_raw not in (None, "") else ""
+        # 校验：tmdbid 存在时必须是数字
+        if tmdbid:
+            try:
+                tmdbid_int = int(tmdbid)
+            except (ValueError, TypeError):
+                return False
+        else:
+            tmdbid_int = None
+        # 校验：tmdbid 存在时 type 必填
+        if tmdbid and not media_type:
+            return False
+        # 校验：没有 tmdbid 时 title 必填
+        if not tmdbid and not title:
+            return False
+        # 校验：type 存在时只能是 movie 或 tv
+        if media_type and media_type not in ("movie", "tv"):
+            return False
         with lock:
-            self.check_and_reload_video_name_mapping()
-            key_name = key.replace(' ', '_').lower()
-            self._video_name_mapping[key_name] = value
-            self._save_video_name_mapping()
+            self.check_and_reload_media_mapping()
+            key_name = self.normalize_media_mapping_key(key)
+            mapping = {}
+            if title:
+                mapping["title"] = title
+            if media_type:
+                mapping["type"] = media_type
+            if tmdbid_int is not None:
+                mapping["tmdbid"] = tmdbid_int
+            self._media_mapping[key_name] = mapping
+            self._save_media_mapping()
+        return True
 
-    def delete_video_name_mapping(self, key):
+    def delete_media_mapping(self, key):
         if not key:
             return
         with lock:
-            self.check_and_reload_video_name_mapping()
-            key_name = key.replace(' ', '_').lower()
-            self._video_name_mapping.pop(key_name, None)
-            self._save_video_name_mapping()
-
-    def list_video_name_mapping(self, name=None):
-        with lock:
-            self.check_and_reload_video_name_mapping()
-            if name:
-                key_name = name.replace(' ', '_').lower()
-                if key_name in self._video_name_mapping:
-                    return {key_name: self._video_name_mapping[key_name]}
-                return {}
-            return dict(self._video_name_mapping)
-
-    def init_tmdb_id_mapping(self):
-        mapping_config_file = self.get_tmdb_id_mapping_file()
-        self._tmdb_id_mapping = {}
-        self._r_tmdb_id_mapping = {}
-        self._tmdb_id_mapping_mtime = 0
-        if not os.path.exists(mapping_config_file):
-            return
-        with open(mapping_config_file, mode='r', encoding='utf-8') as cf:
-            try:
-                # 读取配置
-                for line in cf.readlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # 先检查是否是正则表达式规则
-                    if line.startswith("r:"):
-                        is_regex, video_name, media_type, tmdb_id = line.split(":")
-                        media_type = media_type.strip().lower()
-                        self._r_tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
-                    else:
-                        # 普通规则使用简单的split
-                        video_name, media_type, tmdb_id = line.split(":")
-                        media_type = media_type.strip().lower()
-                        self._tmdb_id_mapping[video_name.strip()] = [media_type, tmdb_id.strip()]
-                self._tmdb_id_mapping_mtime = os.path.getatime(mapping_config_file)
-            except Exception as e:
-                print("【Config】配置文件 %s 格式出现严重错误！请检查：%s" % (mapping_config_file, str(e)))
-                self._tmdb_id_mapping = {}
-                self._r_tmdb_id_mapping = {}
-                self._tmdb_id_mapping_mtime = 0
-        return
-
-    def check_and_reload_tmdb_id_mapping(self):
-        mapping_config_file = self.get_tmdb_id_mapping_file()
-        if not os.path.exists(mapping_config_file):
-            self._tmdb_id_mapping = {}
-            self._r_tmdb_id_mapping = {}
-            self._tmdb_id_mapping_mtime = 0
-            return
-        now_mtime = os.path.getatime(mapping_config_file)
-        if now_mtime > self._tmdb_id_mapping_mtime:
-            self.init_tmdb_id_mapping()
-
-    def get_tmdb_id_mapping(self, name):
-        if not name:
-            return name
-        self.check_and_reload_tmdb_id_mapping()
-        # 先尝试精确匹配
-        result = self._tmdb_id_mapping.get(name)
-        if result:
-            return result
-        # 如果精确匹配失败，尝试正则表达式匹配
-        for regex, value in self._r_tmdb_id_mapping.items():
-            if re.match(regex, name):
-                return value
-        return 0
+            self.check_and_reload_media_mapping()
+            key_name = self.normalize_media_mapping_key(key)
+            self._media_mapping.pop(key_name, None)
+            self._save_media_mapping()
 
     @property
     def current_user(self):
@@ -339,20 +349,6 @@ class Config(object):
         global RMT_FAVTYPE
         if favtype:
             RMT_FAVTYPE = favtype
-
-    def get_video_name_mapping_file(self):
-        file_name = self.get_config("app").get("video_name_mapping_file")
-        if not file_name:
-            file_name = "/config/video_name_mapping.yaml"
-        if not os.path.isabs(file_name):
-            file_name = os.path.join(os.path.dirname(self._config_path), file_name)
-        return file_name
-
-    def get_tmdb_id_mapping_file(self):
-        file_name = self.get_config("app").get("tmdb_id_mapping_file")
-        if not file_name:
-            file_name = "/config/tmdb_id_mapping.conf"
-        return file_name
 
     def get_tmdbapi_url(self):
         return f"https://{self.get_config('app').get('tmdb_domain') or TMDB_API_DOMAINS[0]}/3"

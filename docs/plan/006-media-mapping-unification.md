@@ -1010,3 +1010,31 @@ tmdbid 存在时 type 必填
 - 文件管理页“媒体映射”可同时配置 `title`、`type`、`tmdbid`。
 - UI 和后端都强制执行：有 `tmdbid` 时 `type` 必填。
 - `Climax.S01E01` 到 `S01E10` 只需配置一次 `climax` 即可全部命中同一个 TMDB ID。
+
+## 十一、实施记录
+
+### 已完成变更
+
+| 文件 | 变更 |
+|---|---|
+| config.py | 新增 media_mapping 配置层（init/get/set/delete/list/save）；删除 tmdb_id_mapping 全部代码 |
+| config/config.yaml | 新增 media_mapping_file 配置项 |
+| app/media/media.py | 新增 __apply_media_mapping()；get_media_info/get_media_info_on_files 使用 media_mapping 替代 tmdb_id_mapping |
+| app/media/meta/metavideo.py | 从 __fix_name() 移除 get_video_name_mapping 调用 |
+| web/action.py | 替换为 get_media_mappings/set_media_mapping/delete_media_mapping |
+| web/templates/rename/mediafile.html | 按钮改为"媒体映射"；弹窗支持 title/type/tmdbid |
+| scripts/migrate_video_name_mapping.py | 新增迁移脚本 |
+| tests/test_media_mapping.py | Config 层 18 个单元测试 |
+| tests/test_media_mapping_migration.py | 迁移脚本 9 个单元测试 |
+
+### 迁移方式
+```bash
+# 预览迁移结果
+python scripts/migrate_video_name_mapping.py --source video_name_mapping.yaml --target media_mapping.yaml --dry-run
+
+# 执行迁移
+python scripts/migrate_video_name_mapping.py --source video_name_mapping.yaml --target media_mapping.yaml --overwrite
+```
+
+### 已知限制
+- MetaVideo 的 `_name_nostring_re` 中 IMAX 正则无 `\b` 边界，会将 `Climax` 清洗为 `Cl`。这是已有行为，不影响映射功能正确性，但映射键需使用清洗后的名称（如 `cl` 而非 `climax`）。
