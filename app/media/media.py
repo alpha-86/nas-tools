@@ -136,7 +136,8 @@ class Media:
         if not mtype or not tmdb_id:
             return {}, []
         ret_names = []
-        tmdb_info = self.get_tmdb_info(mtype=mtype, tmdbid=tmdb_id)
+        tmdb_info = self.get_tmdb_info(mtype=mtype, tmdbid=tmdb_id,
+                                         append_to_response="alternative_titles,translations")
         if not tmdb_info:
             return tmdb_info, []
         if mtype == MediaType.MOVIE:
