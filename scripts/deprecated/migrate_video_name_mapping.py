@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This script will be removed in a future release.
+video_name_mapping.yaml is no longer used at runtime. Use media_mapping.yaml instead.
+
 Migration script: convert video_name_mapping.yaml to media_mapping.yaml.
 
 Usage:
-    python scripts/migrate_video_name_mapping.py [--source PATH] [--target PATH] [--overwrite] [--dry-run]
+    python scripts/deprecated/migrate_video_name_mapping.py [--source PATH] [--target PATH] [--overwrite] [--dry-run]
 
 Each `key: value` entry in the source file is converted to `key: {title: value}`.
 """
