@@ -719,23 +719,29 @@ rg -n "yaml\.(load|unsafe_load)" app web --glob "*.py"
 4. 出现在代理日志、负载均衡日志、CDN 日志中
 5. URL 长度限制可能导致截断
 
-**修复策略**（客户端 + 服务端闭环）：
+**修复策略**（客户端 + 服务端闭环，与第七章 Task 8.1–8.3 保持一致）：
 
-1. **客户端 URL 生成**（Telegram/Slack）：新生成的 webhook URL 不再包含 `apikey`：
+1. **Telegram 客户端 URL 生成**（`app/message/client/telegram.py`）：新生成的 webhook URL 不再包含 `apikey`。认证迁移到 Telegram 原生 `secret_token` / `X-Telegram-Bot-Api-Secret-Token`：
 
-```diff
-# app/message/client/telegram.py
--                        self._webhook_url = "%s/telegram?apikey=%s" % (self._domain, self._api_key)
-+                        self._webhook_url = "%s/telegram" % self._domain
-```
+   ```diff
+   # app/message/client/telegram.py
+   -                        self._webhook_url = "%s/telegram?apikey=%s" % (self._domain, self._api_key)
+   +                        self._webhook_url = "%s/telegram" % self._domain
+   ```
 
-```diff
-# app/message/client/slack.py
--        self._ds_url = "http://127.0.0.1:%s/slack?apikey=%s" % (_web_port, _api_key)
-+        self._ds_url = "http://127.0.0.1:%s/slack" % _web_port
-```
+   > **关键约束**：Telegram Bot Platform 调用 webhook 时不会发送任何自定义请求头（包括 `X-API-Key`）。Telegram 仅支持其原生的 `secret_token` 机制——通过 `setWebhook` 时传入 `secret_token` 参数，Telegram 在后续 webhook 请求中会附带 `X-Telegram-Bot-Api-Secret-Token` 请求头。因此 Telegram webhook **不能依赖通用 `X-API-Key`** header。
 
-2. **服务端认证兼容**（`web/security.py`）：`require_auth()` 增加 `X-API-Key` header 支持，短期保留 `request.args.get('apikey')` 兼容存量配置：
+   **服务端 Telegram webhook handler**（`web/security.py` 或独立 handler）：校验 `request.headers.get("X-Telegram-Bot-Api-Secret-Token")`，匹配则放行；仍可短期保留 `request.args.get('apikey')` 作为存量兼容路径。
+
+2. **Slack 客户端 URL 生成**（`app/message/client/slack.py`）：新生成的 `ds_url` 不再包含 `apikey`；改由 NAStool 内部调用方设置 `X-API-Key` header：
+
+   ```diff
+   # app/message/client/slack.py
+   -        self._ds_url = "http://127.0.0.1:%s/slack?apikey=%s" % (_web_port, _api_key)
+   +        self._ds_url = "http://127.0.0.1:%s/slack" % _web_port
+   ```
+
+3. **Slack / 本地转发 / 通用服务端认证兼容**（`web/security.py`）：`require_auth()` 增加 `X-API-Key` header 支持，短期保留 `request.args.get('apikey')` 兼容存量配置：
 
 ```diff
 # web/security.py 中 require_auth()
@@ -761,19 +767,23 @@ rg -n "yaml\.(load|unsafe_load)" app web --glob "*.py"
 **验收命令**：
 
 ```bash
-# 1. 客户端：Telegram webhook URL 不再包含 apikey
+# 1. Telegram 客户端：新生成 webhook URL 不再包含 apikey
 rg -n "apikey=" app/message/client/telegram.py
 # 期望：无命中
 
-# 2. 客户端：Slack ds_url 不再包含 apikey
+# 2. Telegram 服务端：secret_token 校验存在（方案 A）或 query apikey 兼容已脱敏（方案 B）
+rg -n "X-Telegram-Bot-Api-Secret-Token" app web --glob "*.py"
+# 期望：命中 Telegram webhook handler 中的校验逻辑（方案 A）
+
+# 3. Slack 客户端：ds_url 不再包含 apikey
 rg -n "apikey=" app/message/client/slack.py
 # 期望：无命中
 
-# 3. 服务端：require_auth 支持 X-API-Key header
+# 4. Slack / 通用服务端：require_auth 支持 X-API-Key header（不替代 Telegram secret_token）
 rg -n "X-API-Key" web/security.py
-# 期望：命中 X-API-Key header 读取逻辑
+# 期望：命中 X-API-Key header 读取逻辑，且该逻辑明确用于 Slack/本地转发
 
-# 4. 服务端：短期兼容旧 query string（允许存在，但不应是唯一认证方式）
+# 5. 服务端：短期兼容旧 query string（允许存在，但不应是唯一认证方式）
 rg -n "apikey" web/security.py
 # 期望：命中 request.args.get('apikey') 兼容逻辑
 ```
@@ -1135,7 +1145,9 @@ rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py
 
 7. **CloudflareSpeedTest 插件**：由于上游 Release 不提供独立 SHA256 校验文件，短期方案是维护者手动计算每个版本的 SHA256 并硬编码。长期建议改为用户手动上传二进制并配置路径，完全消除自动下载执行的风险。
 
-8. **API key 传输加固的向后兼容**：Telegram/Slack webhook handler 需要同时支持 Header 读取和 query string 读取（`request.args.get('apikey')`），以保证存量用户的 webhook URL 配置在短期内仍可工作。可在下一个大版本中完全移除 query string 支持。
+8. **API key 传输加固的向后兼容**（分场景处理）：
+   - **Telegram**：推荐迁移到原生 `secret_token` / `X-Telegram-Bot-Api-Secret-Token`。若选兼容方案，query `apikey` 作为 Telegram 平台限制导致的例外保留，并需确保访问日志脱敏。Telegram **不可用 `X-API-Key`** 作为替代（Telegram 平台永远不会发送该 header）。
+   - **Slack / 本地转发**：改用 `X-API-Key` header。短期保留 `request.args.get('apikey')` 兼容存量配置，可在下一个大版本中完全移除 query string 支持。
 
 9. **默认弱口令消除**：首次启动时生成的随机密码会被写入 config.yaml。用户需要查看日志获取。建议同步在 Web UI 登录失败页面提示 "默认密码已生成，请查看日志"。
 
