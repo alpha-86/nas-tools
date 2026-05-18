@@ -222,11 +222,7 @@ function __main {
         git remote set-url origin "${REPO_URL}" &> /dev/null
         echo "windows/" > .gitignore
         # 更新分支
-        if [[ "${NASTOOL_VERSION}" == "dev" ]]; then
-        branch="dev"
-        else
-        branch="master"
-        fi
+        branch="${NASTOOL_VERSION:-main}"
 
         git clean -dffx
         git fetch --depth 1 origin ${branch}
