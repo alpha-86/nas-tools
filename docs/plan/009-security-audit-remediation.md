@@ -18,7 +18,7 @@
 | 8 | 反序列化 | `ruamel.yaml.YAML().load(f)` 使用默认 loader | **中** | YAML 文件中若被注入恶意构造，可能导致对象反序列化 |
 | 9 | 信息泄露 | API key / token 大量通过 URL query string 传输 | **中** | 密钥出现在 access logs、浏览器历史、Referer headers、代理日志中 |
 | 10 | 弱口令 | 默认 `login_password = "password"` | **高** | 新安装实例可被任何人登录 |
-| 11 | Session/CSRF | Flask session cookie 无 `HttpOnly`/`Secure`/`SameSite`；无 CSRF 保护 | **中** | XSS 可窃取 session；跨站可伪造 POST 请求 |
+| 11 | Session Cookie | Flask session cookie 无 `HttpOnly`/`Secure`/`SameSite`（CSRF 保护待后续迭代） | **中** | XSS 可窃取 session；跨站可伪造 POST 请求（CSRF 为残余风险） |
 | 12 | 加密 | `user.sites.bin` 使用硬编码 Fernet 密钥 | **低** | 密钥已公开，但仅用于站点爬虫规则，不含用户凭证 |
 
 ---
@@ -52,7 +52,8 @@ Phase 5: TLS 校验恢复
     └─ RequestUtils 默认 verify=True；仅对用户明确配置的自签名证书服务降级
 
 Phase 6: CloudflareSpeedTest 供应链硬化
-    └─ os.system 改为 subprocess.run + 参数列表；增加 SHA256 校验和验证
+    ├─ P0: 禁用自动下载和自动执行外部二进制
+    └─ P1: checksum 校验 或 用户手动上传二进制
 
 Phase 7: YAML 安全加载
     └─ ruamel.yaml 显式使用 safe loader
@@ -63,8 +64,8 @@ Phase 8: API key 传输加固
 Phase 9: 弱口令消除
     └─ 默认密码改为强制随机生成，首次登录必须修改
 
-Phase 10: Session/CSRF 加固
-    └─ 启用 HttpOnly + Secure + SameSite=Lax；评估引入 Flask-WTF CSRF 保护
+Phase 10: Session Cookie 加固（本轮）；CSRF 保护标记为 P1 后续
+    └─ 启用 HttpOnly + Secure + SameSite=Lax；CSRF token 引入为后续迭代（残余风险）
 ```
 
 ---
@@ -261,7 +262,18 @@ class OcrHelper:
                         log.warn(f"test_connection: 拒绝未授权的网络测试目标: {cmd}")
                         ret = False
                         break
-                    ret = RequestUtils().get_res(f"https://{cmd}", timeout=5) is not None
+                    # 保留原 __net_test 的路径补全和代理选择逻辑
+                    target = cmd
+                    if target == "image.tmdb.org":
+                        target = target + "/t/p/w500/wwemzKWzjKYJFfCeiB57q3r4Bcm.png"
+                    if target == "qyapi.weixin.qq.com":
+                        target = target + "/cgi-bin/message/send"
+                    url = "https://" + target
+                    if "themoviedb" in url or "telegram" in url or "fanart" in url or "tmdb" in url:
+                        res = RequestUtils(proxies=Config().get_proxies(), timeout=5).get_res(url)
+                    else:
+                        res = RequestUtils(timeout=5).get_res(url)
+                    ret = res is not None and res.ok
                 if not ret:
                     break
 
@@ -299,18 +311,46 @@ class OcrHelper:
 + req = self._session.request(method, url, data=data, proxies=ast.literal_eval(self.proxies) if self.proxies else None, timeout=10, verify=False)
 ```
 
-#### 3.2.3 BrushTask rules (`app/brushtask.py:125-126`)
+#### 3.2.3 BrushTask rules (`app/brushtask.py:125-126`, `app/helper/db_helper.py`)
+
+**写入端** (`db_helper.py`): 将 `str(item.get('rss_rule'))` 改为 `json.dumps(..., ensure_ascii=False)`，确保入库的是标准 JSON 字符串：
 
 ```diff
   import json
 
--               "rss_rule": eval(task.RSS_RULE),
--               "remove_rule": eval(task.REMOVE_RULE),
-+               "rss_rule": json.loads(task.RSS_RULE) if task.RSS_RULE else {},
-+               "remove_rule": json.loads(task.REMOVE_RULE) if task.REMOVE_RULE else {},
+-                RSS_RULE=str(item.get('rss_rule')),
+-                REMOVE_RULE=str(item.get('remove_rule')),
++                RSS_RULE=json.dumps(item.get('rss_rule') or {}, ensure_ascii=False),
++                REMOVE_RULE=json.dumps(item.get('remove_rule') or {}, ensure_ascii=False),
 ```
 
-> 确认 `RSS_RULE` / `REMOVE_RULE` 在数据库中以 JSON 字符串存储（来自前端提交和 `json.dumps`）。如字段值为 Python 字典字面量字符串，也兼容 `json.loads`。
+**读取端** (`brushtask.py`): 优先 `json.loads`，兼容旧数据 `ast.literal_eval`，读取成功后迁移保存为 JSON：
+
+```python
+import json
+import ast
+
+def _load_rule(rule_str):
+    if not rule_str:
+        return {}
+    try:
+        return json.loads(rule_str)
+    except (json.JSONDecodeError, ValueError):
+        try:
+            val = ast.literal_eval(rule_str)
+            if isinstance(val, dict):
+                # 旧数据读取成功，由保存/编辑流程写回 JSON
+                return val
+            return {}
+        except (ValueError, SyntaxError):
+            return {}
+
+# 使用
+"rss_rule": _load_rule(task.RSS_RULE),
+"remove_rule": _load_rule(task.REMOVE_RULE),
+```
+
+> **注意**：`json.loads` **不兼容** Python 字典字面量中的单引号（`'key': 'value'`）和 `True/False/None`。因此读取端必须保留 `ast.literal_eval` fallback。旧数据在首次读取成功后，应在保存时由写入端重写为 JSON，完成迁移。
 
 #### 3.2.4 WordsHelper (`app/helper/words_helper.py:131`) — 安全算术解析
 
@@ -560,38 +600,61 @@ rg -n "verify\s*=\s*False" app web --glob "*.py"
 
 **修复策略**：
 
-1. **下载校验**：获取 GitHub Release 的 SHA256 校验和（或通过 GitHub API 获取已验证的 release asset hash），下载后校验。
-2. **`os.system` → `subprocess.run`**：使用参数列表而非字符串拼接，防止命令注入。
-3. **移除 `--no-check-certificate`**：恢复 TLS 校验。
-4. **沙箱化**：如果可行，在临时容器或受限权限下执行二进制。
+**P0 — 禁用自动下载和自动执行外部二进制**：
+
+1. **删除 `__os_install` 中的自动下载逻辑**：不再调用 `wget` 下载外部二进制。插件启动时若二进制不存在，直接报错并停止，提示用户手动上传。
+2. **删除 `os.system(cf_command)`**：不再通过 `os.system` / `subprocess` 自动执行外部二进制。如果仍需调用 `CloudflareST`，必须改为用户显式确认后执行，且使用 `subprocess.run` 参数列表（非字符串拼接）。
+3. **移除 `--no-check-certificate`**：任何剩余的 `wget`/`curl` 调用恢复 TLS 校验。
 
 ```diff
-  def __os_install(self, download_url, cf_file_name, release_version, unzip_command):
-      if not Path(f'{self._cf_path}/{cf_file_name}').exists():
-          # 使用 subprocess.run 替代 os.system，防止命令注入
-          cmd = ['wget', '-P', self._cf_path, f'https://ghproxy.com/{download_url}']
-          subprocess.run(cmd, check=True)
-
-      if Path(f'{self._cf_path}/{cf_file_name}').exists():
-          try:
-              # 使用 subprocess.run 替代 os.system
-              subprocess.run(['tar', '-zxf', f'{self._cf_path}/{cf_file_name}', '-C', self._cf_path], check=True)
-              Path(f'{self._cf_path}/{cf_file_name}').unlink()
-              ...
+  def __check_envirment(self):
+      ...
+-     # 自动下载安装逻辑
+-     return self.__os_install(...)
++     # P0：禁用自动下载。若二进制不存在，提示用户手动上传
++     if not Path(f'{self._cf_path}/{self._binary_name}').exists():
++         self.error(f"CloudflareSpeedTest 二进制不存在，请手动下载并放置到 {self._cf_path}")
++         return False, None
++     return True, self._version
 ```
 
-> 完整实现需包含 SHA256 校验和验证逻辑。由于 CloudflareSpeedTest 官方 Release 不提供独立 checksum 文件，建议：
-> 1. 维护者手动计算每个版本的 SHA256 并硬编码在插件中；或
-> 2. 不再自动下载，改为用户手动上传二进制并配置路径。
+**P1 — 校验和校验或用户手动上传（增强）**：
+
+- 若维护者决定保留有限的自动下载能力（需用户显式开启），则必须：
+  1. 使用 `subprocess.run` 参数列表替代 `os.system`。
+  2. 下载后计算 SHA256，与硬编码的已知 good hash 比对，不匹配则拒绝执行。
+  3. 或改为用户手动上传二进制并配置路径，完全消除自动下载执行风险。
+
+```python
+# P1 增强示例：若保留下载，必须加 checksum
+import hashlib
+
+_KNOWN_SHA256 = {
+    "v2.2.4": {
+        "CloudflareST_linux_amd64.tar.gz": "abc123...",
+    }
+}
+
+def _verify_checksum(filepath, expected):
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest() == expected
+```
 
 **验收命令**：
 
 ```bash
-# 1. cloudflarespeedtest.py 中无 os.system
-rg -n "os\.system" app/plugins/modules/cloudflarespeedtest.py
-# 期望：无命中
+# P0 验收：无自动下载（无 wget/curl 下载外部二进制）
+rg -n "wget|curl|ghproxy\.com|github\.com.*CloudflareST" app/plugins/modules/cloudflarespeedtest.py
+# 期望：无命中（或仅命中注释/文档）
 
-# 2. 下载逻辑包含校验和验证（如维护者选择方案 1）
+# P0 验收：无 os.system / subprocess.run 执行外部二进制（除非用户已显式确认）
+rg -n "os\.system|subprocess" app/plugins/modules/cloudflarespeedtest.py
+# 期望：无命中自动执行逻辑
+
+# P1 增强验收：若保留下载，命中 SHA256 校验逻辑
 rg -n "sha256|checksum|hashlib" app/plugins/modules/cloudflarespeedtest.py
 # 期望：命中校验和验证代码
 ```
@@ -615,18 +678,13 @@ self._categorys = yaml.load(f)
 **修复策略**：显式使用 safe loader：
 
 ```diff
-              yaml = ruamel.yaml.YAML()
-+             yaml.preserve_quotes = True
-+             yaml.default_flow_style = False
+-             yaml = ruamel.yaml.YAML()
 -             self._categorys = yaml.load(f)
-+             self._categorys = yaml.load(f, Loader=ruamel.yaml.SafeLoader)
++             yaml = ruamel.yaml.YAML(typ='safe')
++             self._categorys = yaml.load(f)
 ```
 
-> 实际上 ruamel.yaml 推荐的做法是 `yaml = ruamel.yaml.YAML(typ='safe')`。更简洁的方式：
-> ```python
-> yaml = ruamel.yaml.YAML(typ='safe')
-> self._categorys = yaml.load(f)
-> ```
+> `ruamel.yaml.YAML(typ='safe')` 仅解析标准 YAML 标量、序列和映射，拒绝 `!!python/object` 等对象标签。
 
 **验收命令**：
 
@@ -659,10 +717,9 @@ rg -n "yaml\.(load|unsafe_load)" app web --glob "*.py"
 4. 出现在代理日志、负载均衡日志、CDN 日志中
 5. URL 长度限制可能导致截断
 
-**修复策略**：
+**修复策略**（客户端 + 服务端闭环）：
 
-1. **Telegram/Slack webhook URL**：将 `apikey` 从 query string 移除。NAStool 的 webhook handler 应改为从 HTTP Header（如 `X-API-Key`）或 POST body 中读取 apikey。前端 webhook URL 配置中不再包含 apikey。
-2. **Jellyfin/Emby**：`api_key` 在 URL query string 中是 Jellyfin/Emby 官方 API 的设计（非 NAStool 可控）。但可在文档中提醒用户：如果 Jellyfin/Emby 暴露在公网，考虑使用反向代理 + 白名单限制。此项标记为 **外部依赖，文档提醒**。
+1. **客户端 URL 生成**（Telegram/Slack）：新生成的 webhook URL 不再包含 `apikey`：
 
 ```diff
 # app/message/client/telegram.py
@@ -676,25 +733,47 @@ rg -n "yaml\.(load|unsafe_load)" app web --glob "*.py"
 +        self._ds_url = "http://127.0.0.1:%s/slack" % _web_port
 ```
 
-> Webhook handler（`web/main.py` 中的 `/telegram` 和 `/slack` 路由）需要同步修改，从 request header `X-API-Key` 读取 apikey。例如：
-> ```python
-> api_key = request.headers.get('X-API-Key') or request.args.get('apikey')  # 兼容旧配置
-> ```
+2. **服务端认证兼容**（`web/security.py`）：`require_auth()` 增加 `X-API-Key` header 支持，短期保留 `request.args.get('apikey')` 兼容存量配置：
+
+```diff
+# web/security.py 中 require_auth()
+        auth = request.headers.get("Authorization")
+        if auth:
+            auth = str(auth).split()[-1]
+            if auth == Config().get_config("security").get("api_key"):
+                return func(*args, **kwargs)
++       auth = request.headers.get("X-API-Key")
++       if auth:
++           if auth == Config().get_config("security").get("api_key"):
++               return func(*args, **kwargs)
+        # 允许使用在api后面拼接 ?apikey=xxx 的方式进行验证
+        # 从query中获取apikey
+        auth = request.args.get("apikey")
+        if auth:
+            if auth == Config().get_config("security").get("api_key"):
+                return func(*args, **kwargs)
+```
+
+3. **Jellyfin/Emby**：`api_key` 在 URL query string 中是 Jellyfin/Emby 官方 API 的设计（非 NAStool 可控）。此项标记为 **外部依赖，文档提醒**。
 
 **验收命令**：
 
 ```bash
-# 1. Telegram webhook URL 不再包含 apikey
+# 1. 客户端：Telegram webhook URL 不再包含 apikey
 rg -n "apikey=" app/message/client/telegram.py
-# 期望：无命中（或仅保留向后兼容的 request.args.get('apikey')）
+# 期望：无命中
 
-# 2. Slack ds_url 不再包含 apikey
+# 2. 客户端：Slack ds_url 不再包含 apikey
 rg -n "apikey=" app/message/client/slack.py
 # 期望：无命中
 
-# 3. Webhook handler 从 Header 读取 apikey
-rg -n "X-API-Key|apikey" web/main.py
+# 3. 服务端：require_auth 支持 X-API-Key header
+rg -n "X-API-Key" web/security.py
 # 期望：命中 X-API-Key header 读取逻辑
+
+# 4. 服务端：短期兼容旧 query string（允许存在，但不应是唯一认证方式）
+rg -n "apikey" web/security.py
+# 期望：命中 request.args.get('apikey') 兼容逻辑
 ```
 
 ---
@@ -814,14 +893,16 @@ print('[OK] Session cookie 加固配置已存在')
 | `app/plugins/modules/cookiecloud.py` | 修改占位符 | CookieCloud 默认地址改为 localhost |
 | `web/action.py` | **完全删除 eval + 硬化更新 + SSRF 白名单** | __test_connection 改为白名单执行；update_system 禁用所有自动更新 |
 | `app/media/tmdbv3api/tmdb.py` | eval → ast.literal_eval + **移除 verify=False** | 两处 proxies 解析；恢复 TLS 校验 |
-| `app/brushtask.py` | eval → json.loads | RSS_RULE / REMOVE_RULE 解析 |
+| `app/helper/db_helper.py` | str → **json.dumps** | BrushTask RSS_RULE / REMOVE_RULE 写入端改为标准 JSON |
+| `app/brushtask.py` | eval → **json.loads + ast.literal_eval fallback** | RSS_RULE / REMOVE_RULE 读取端兼容旧数据并迁移 |
 | `app/helper/words_helper.py` | eval → **safe_arith_eval** | 自定义安全算术解析器，支持 EP+1/EP-2 |
 | `app/helper/meta_helper.py` | pickle → json + 新文件名 | tmdb.dat → tmdb.json，不读旧文件 |
 | `app/utils/http_utils.py` | **恢复 TLS 校验** | 默认 verify=True；通过参数允许显式关闭 |
-| `app/plugins/modules/cloudflarespeedtest.py` | **供应链硬化** | os.system → subprocess.run；增加 SHA256 校验 |
+| `app/plugins/modules/cloudflarespeedtest.py` | **供应链硬化** | P0: 禁用自动下载/执行外部二进制；P1: subprocess.run + SHA256 校验 |
 | `app/media/category.py` | **YAML safe loader** | ruamel.yaml 显式使用 safe loader |
 | `app/message/client/telegram.py` | **API key 脱离 query string** | webhook URL 不再包含 apikey |
 | `app/message/client/slack.py` | **API key 脱离 query string** | ds_url 不再包含 apikey |
+| `web/security.py` | **require_auth 支持 X-API-Key** | 服务端增加 header 认证，短期兼容旧 query |
 | `web/main.py` | **Session cookie 加固** | 添加 SESSION_COOKIE_HTTPONLY / SESSION_COOKIE_SAMESITE |
 | `docs/plan/009-security-audit-remediation.md` | 本文件 | 完整安全问题覆盖清单 |
 
@@ -1116,10 +1197,10 @@ rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py
 - **内容**: 两处 `eval(proxies)` 改为 `ast.literal_eval`
 - **验收**: `rg -n "\beval\s*\(" app/media/tmdbv3api/tmdb.py` 无命中
 
-#### Task 2.3: BrushTask rules eval → json.loads
-- **文件**: `app/brushtask.py`
-- **内容**: 两处 `eval` 改为 `json.loads`
-- **验收**: `rg -n "\beval\s*\(" app/brushtask.py` 无命中
+#### Task 2.3: BrushTask rules eval → json.loads + ast.literal_eval fallback
+- **文件**: `app/brushtask.py`（读取端）、`app/helper/db_helper.py`（写入端）
+- **内容**: 写入端 `str()` 改为 `json.dumps(..., ensure_ascii=False)`；读取端优先 `json.loads`，失败时 `ast.literal_eval` 兼容旧数据，保存时迁移为 JSON
+- **验收**: `rg -n "\beval\s*\(" app/brushtask.py` 无命中；`rg -n "json\.dumps" app/helper/db_helper.py` 命中写入逻辑
 
 #### Task 2.4: WordsHelper eval → safe_arith_eval
 - **文件**: `app/helper/words_helper.py`
@@ -1152,16 +1233,16 @@ rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py
 - **内容**: 移除两处 `verify=False`
 - **验收**: `rg -n "verify\s*=\s*False" app/media/tmdbv3api/tmdb.py` 无命中
 
-### Phase 6: CloudflareSpeedTest 供应链硬化（P1）
+### Phase 6: CloudflareSpeedTest 供应链硬化
 
-#### Task 6.1: os.system → subprocess.run
+#### Task 6.1: 禁用自动下载和自动执行外部二进制（P0）
 - **文件**: `app/plugins/modules/cloudflarespeedtest.py`
-- **内容**: 所有 `os.system` 改为 `subprocess.run` 参数列表
-- **验收**: `rg -n "os\.system" app/plugins/modules/cloudflarespeedtest.py` 无命中
+- **内容**: 删除 `__os_install` 自动下载逻辑；删除 `os.system(cf_command)` 自动执行；二进制缺失时提示用户手动上传
+- **验收**: `rg -n "wget|curl|ghproxy\.com|github\.com.*CloudflareST" app/plugins/modules/cloudflarespeedtest.py` 无命中；`rg -n "os\.system|subprocess" app/plugins/modules/cloudflarespeedtest.py` 无命中自动执行逻辑
 
-#### Task 6.2: 增加 SHA256 校验和
+#### Task 6.2: 增加 SHA256 校验和或改为手动上传（P1 增强）
 - **文件**: `app/plugins/modules/cloudflarespeedtest.py`
-- **内容**: 下载后计算 SHA256 并与硬编码值比对，不匹配则拒绝执行
+- **内容**: 若保留下载能力，下载后计算 SHA256 并与硬编码值比对；或改为用户手动上传二进制并配置路径
 - **验收**: `rg -n "sha256|hashlib" app/plugins/modules/cloudflarespeedtest.py` 命中校验逻辑
 
 ### Phase 7: YAML 安全加载（P1）
@@ -1195,12 +1276,15 @@ rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py
 - **内容**: 删除 `"password"` 回退；未配置时生成 32 位随机字符串
 - **验收**: `rg -n 'or "password"' initializer.py` 无命中
 
-### Phase 10: Session Cookie 加固（P1）
+### Phase 10: Session Cookie 加固（本轮 P1）；CSRF 保护标记为残余风险/P1 后续
 
-#### Task 10.1: 启用 HttpOnly + SameSite
+#### Task 10.1: 启用 HttpOnly + SameSite + Secure
 - **文件**: `web/main.py`
-- **内容**: 添加 `SESSION_COOKIE_HTTPONLY = True` 和 `SESSION_COOKIE_SAMESITE = 'Lax'`
+- **内容**: 添加 `SESSION_COOKIE_HTTPONLY = True`、`SESSION_COOKIE_SAMESITE = 'Lax'`，支持 `NASTOOL_SESSION_SECURE` 环境变量开启 `SESSION_COOKIE_SECURE`
 - **验收**: `rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py` 命中配置行
+
+#### Task 10.2: CSRF 保护（P1 后续迭代，残余风险）
+- **说明**: 引入 Flask-WTF CSRFProtect 需大量前端改动（所有 POST form 添加 csrf_token）。本次不实施，标记为后续任务。
 
 ### Phase 11: 全局安全回归（P0，依赖 Phase 1-10）
 
