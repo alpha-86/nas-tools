@@ -1,6 +1,6 @@
 # Plan 009: Security Audit Remediation — 完整安全问题覆盖清单
 
-> 目标：全面消除代码中的数据外传隐患、RCE 攻击面、供应链风险、TLS 中间人攻击面、SSRF、弱口令、CSRF/Session 加固缺陷。
+> 目标：全面消除数据外传隐患、RCE 攻击面、供应链风险、TLS 中间人攻击面、SSRF、弱口令；完成 Session Cookie 加固，并登记 CSRF 残余风险/P1 后续。
 
 ---
 
@@ -603,7 +603,7 @@ rg -n "verify\s*=\s*False" app web --glob "*.py"
 **P0 — 禁用自动下载和自动执行外部二进制**：
 
 1. **删除 `__os_install` 中的自动下载逻辑**：不再调用 `wget` 下载外部二进制。插件启动时若二进制不存在，直接报错并停止，提示用户手动上传。
-2. **删除 `os.system(cf_command)`**：不再通过 `os.system` / `subprocess` 自动执行外部二进制。如果仍需调用 `CloudflareST`，必须改为用户显式确认后执行，且使用 `subprocess.run` 参数列表（非字符串拼接）。
+2. **删除 `os.system(cf_command)`**：不再通过 `os.system` / `subprocess` 自动执行外部二进制。
 3. **移除 `--no-check-certificate`**：任何剩余的 `wget`/`curl` 调用恢复 TLS 校验。
 
 ```diff
@@ -650,7 +650,7 @@ def _verify_checksum(filepath, expected):
 rg -n "wget|curl|ghproxy\.com|github\.com.*CloudflareST" app/plugins/modules/cloudflarespeedtest.py
 # 期望：无命中（或仅命中注释/文档）
 
-# P0 验收：无 os.system / subprocess.run 执行外部二进制（除非用户已显式确认）
+# P0 验收：无 os.system / subprocess.run 执行外部二进制
 rg -n "os\.system|subprocess" app/plugins/modules/cloudflarespeedtest.py
 # 期望：无命中自动执行逻辑
 
@@ -1264,10 +1264,10 @@ rg -n "SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE" web/main.py
 - **内容**: ds_url 不再包含 apikey
 - **验收**: `rg -n "apikey=" app/message/client/slack.py` 无命中
 
-#### Task 8.3: Webhook handler 从 Header 读取 apikey
-- **文件**: `web/main.py`
-- **内容**: `/telegram` 和 `/slack` 路由从 `X-API-Key` header 读取 apikey
-- **验收**: `rg -n "X-API-Key" web/main.py` 命中 handler 逻辑
+#### Task 8.3: require_auth() 支持 X-API-Key header
+- **文件**: `web/security.py`
+- **内容**: `require_auth()` 增加 `request.headers.get("X-API-Key")` 读取，短期保留 `request.args.get('apikey')` 兼容存量配置
+- **验收**: `rg -n "X-API-Key" web/security.py` 命中认证逻辑
 
 ### Phase 9: 弱口令消除（P0）
 
