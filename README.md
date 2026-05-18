@@ -16,18 +16,9 @@ API: http://localhost:3000/api/v1/
 ## 安装
 ### 1、Docker
 ```
-docker pull nastool/nas-tools:latest
+docker pull alpha8686/nas-tools:latest
 ```
 
-### 2、可执行文件
-
-https://github.com/NAStool/nas-tools/releases
-
-### 4、群晖套件
-
-https://spk.imnks.com/
-
-https://spk7.imnks.com/
 
 ## 免责声明
 1) 本软件仅供学习交流使用，对用户的行为及内容毫不知情，使用本软件产生的任何责任需由使用者本人承担。
