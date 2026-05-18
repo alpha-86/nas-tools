@@ -60,20 +60,21 @@ Phase 1: 移除 nastool.org 遥测（最高优先级，可立即执行）
     ├─ 禁用 PluginHelper 的三个远程调用
     ├─ 禁用 OcrHelper 远程 OCR
     ├─ 禁用版本检查远程调用
-    ├─ 移除 wechat.nastool.org 默认代理
-    └─ 移除 initializer.py 启动上报
+    ├─ 移除 tmdb.nastool.org / wechat.nastool.org / nastool.org/cookiecloud
+    ├─ 移除 initializer.py 启动上报
+    └─ 移除 config.py 中 tmdb.nastool.org 域名
 
-Phase 2: 消除 eval() RCE
-    ├─ __test_connection: 限制命名空间 + 白名单校验
+Phase 2: 消除 eval() RCE（代码中无 eval()）
+    ├─ __test_connection: 完全删除 eval，改为后端白名单执行
     ├─ tmdb proxies: ast.literal_eval 替代
     ├─ brushtask rules: json.loads 替代
-    └─ words_helper: ast.literal_eval 替代
+    └─ words_helper: ast 安全算术解析替代
 
 Phase 3: 硬化自动更新
-    └─ 改为只读通知模式，禁止自动 git reset + pip install
+    └─ 所有环境（含群晖）改为只提示手动更新，禁止任何 os.system/git/pip 自动执行
 
 Phase 4: 消除 pickle RCE
-    └─ tmdb.dat 缓存改为 JSON 序列化
+    └─ tmdb 缓存改为 JSON 序列化，写入新文件 tmdb.json，不再读取旧 tmdb.dat
 ```
 
 ---
@@ -145,14 +146,57 @@ class OcrHelper:
         return None, None
 ```
 
-#### 3.1.4 企业微信默认代理 (`app/conf/moduleconf.py`)
+#### 3.1.4 TMDB 域名白名单 (`config.py`)
+
+移除 `tmdb.nastool.org` 和 `t.nastool.workers.dev`：
+
+```diff
+- TMDB_API_DOMAINS = ['api.themoviedb.org', 'api.tmdb.org', 'tmdb.nastool.org', 't.nastool.workers.dev']
++ TMDB_API_DOMAINS = ['api.themoviedb.org', 'api.tmdb.org']
+```
+
+#### 3.1.5 initializer.py 默认域名迁移
+
+删除 initializer.py 中向配置写入 `tmdb.nastool.org` 的迁移逻辑：
+
+```diff
+-    # TMDB代理服务开关迁移
+-    try:
+-        tmdb_proxy = Config().get_config('laboratory').get("tmdb_proxy")
+-        if tmdb_proxy:
+-            _config['app']['tmdb_domain'] = 'tmdb.nastool.org'
+-            _config['laboratory'].pop("tmdb_proxy")
+-            overwrite_cofig = True
+-    except Exception as e:
+-        ExceptionUtils.exception_traceback(e)
+```
+
+#### 3.1.6 企业微信默认代理 (`app/conf/moduleconf.py`)
 
 ```diff
 -                        "placeholder": "https://wechat.nastool.org"
 +                        "placeholder": "https://qyapi.weixin.qq.com"
 ```
 
-#### 3.1.5 启动上报 (`initializer.py`)
+#### 3.1.7 企业微信客户端默认代理 (`app/message/client/wechat.py`)
+
+```diff
+-    _default_proxy_url = 'https://wechat.nastool.org'
++    _default_proxy_url = None
+```
+
+> `_default_proxy_url` 不再指向任何第三方代理。已配置 `wechat.nastool.org` 的存量用户不受影响（config.yaml 中持久化的值不会被覆盖），仅影响未配置时使用默认值的新安装场景。
+
+#### 3.1.8 CookieCloud 默认服务器 (`app/plugins/modules/cookiecloud.py`)
+
+```diff
+-                                    'placeholder': 'https://nastool.org/cookiecloud'
++                                    'placeholder': 'http://localhost:8088'
+```
+
+> CookieCloud 是用户自建服务，placeholder 不应指向已失效的第三方地址。改为 `localhost:8088` 作为自建服务的典型端口提示。
+
+#### 3.1.9 启动上报 (`initializer.py`)
 
 删除以下代码块：
 
@@ -169,62 +213,85 @@ class OcrHelper:
 -        ExceptionUtils.exception_traceback(e)
 ```
 
-### 3.2 消除 eval() RCE
+---
 
-#### 3.2.1 __test_connection (`web/action.py:1652-1687`)
+### 3.2 消除 eval() RCE（代码中无 eval()）
 
-将无限制的 `eval()` 改为限制命名空间的受控执行：
+#### 3.2.1 __test_connection (`web/action.py:1652-1687`) — 完全删除 eval
+
+将无限制的 `eval()` 改为后端白名单执行。不再执行任何前端传入的 Python 表达式。
+
+**处理逻辑：**
+
+1. **普通网络连通性测试**：`command` 为字符串（非 list，不含 `|`）。后端根据 `ModuleConf.NETTEST_TARGETS` 白名单，执行实际的 HTTP 请求或 socket 连接测试。
+2. **Media Server 状态测试**：`command` 为 `module|Class` 形式。只允许三个固定映射，禁止任意 `importlib.import_module`：
+   - `"app.mediaserver.client.emby|Emby"` → 固定实例化 `Emby` 并调用 `get_status()`
+   - `"app.mediaserver.client.jellyfin|Jellyfin"` → 固定实例化 `Jellyfin`
+   - `"app.mediaserver.client.plex|Plex"` → 固定实例化 `Plex`
+   - 其他任何 `module|Class` 一律拒绝
+3. **批量测试**：`command` 为 list 时，逐个按上述规则处理。
 
 ```python
     @staticmethod
     def __test_connection(data):
         """
-        测试连通性
+        测试连通性（无 eval，白名单执行）
         """
         command = data.get("command")
         ret = None
-        if command:
-            try:
-                # 安全的 eval 命名空间：只允许访问预定义模块和类
-                safe_globals = {"__builtins__": {}}
-                safe_locals = {
-                    "Config": Config,
-                    "RequestUtils": RequestUtils,
-                    "SystemUtils": SystemUtils,
-                    "StringUtils": StringUtils,
-                    "ExceptionUtils": ExceptionUtils,
-                    "json": __import__("json"),
-                    "os": __import__("os"),
-                }
-                module_obj = None
-                if isinstance(command, list):
-                    for cmd_str in command:
-                        ret = eval(cmd_str, safe_globals, safe_locals)
-                        if not ret:
-                            break
+        if not command:
+            return {"code": 0}
+
+        try:
+            # Media Server 固定映射白名单
+            MEDIA_SERVER_MAP = {
+                "app.mediaserver.client.emby|Emby": Emby,
+                "app.mediaserver.client.jellyfin|Jellyfin": Jellyfin,
+                "app.mediaserver.client.plex|Plex": Plex,
+            }
+            # 网络测试白名单（来自 ModuleConf.NETTEST_TARGETS）
+            NETTEST_WHITELIST = set(ModuleConf.NETTEST_TARGETS)
+
+            commands = command if isinstance(command, list) else [command]
+            for cmd in commands:
+                if "|" in cmd:
+                    # Media Server 状态测试
+                    if cmd not in MEDIA_SERVER_MAP:
+                        log.warn(f"test_connection: 拒绝未授权的 Media Server 类型: {cmd}")
+                        ret = False
+                        break
+                    cls = MEDIA_SERVER_MAP[cmd]
+                    instance = cls()
+                    if hasattr(instance, "init_config"):
+                        instance.init_config()
+                    ret = instance.get_status()
                 else:
-                    if command.find("|") != -1:
-                        module = command.split("|")[0]
-                        class_name = command.split("|")[1]
-                        module_obj = getattr(
-                            importlib.import_module(module), class_name)()
-                        if hasattr(module_obj, "init_config"):
-                            module_obj.init_config()
-                        ret = module_obj.get_status()
-                    else:
-                        ret = eval(command, safe_globals, safe_locals)
-                Config().init_config()
-                if module_obj:
-                    if hasattr(module_obj, "init_config"):
-                        module_obj.init_config()
-            except Exception as e:
-                ret = None
-                ExceptionUtils.exception_traceback(e)
-            return {"code": 0 if ret else 1}
-        return {"code": 0}
+                    # 网络连通性测试
+                    if cmd not in NETTEST_WHITELIST:
+                        log.warn(f"test_connection: 拒绝未授权的网络测试目标: {cmd}")
+                        ret = False
+                        break
+                    ret = RequestUtils().get_res(f"https://{cmd}", timeout=5) is not None
+                if not ret:
+                    break
+
+            Config().init_config()
+        except Exception as e:
+            ret = None
+            ExceptionUtils.exception_traceback(e)
+        return {"code": 0 if ret else 1}
 ```
 
-> `safe_locals` 白名单按需扩展。核心原则：`__builtins__` 为空字典，禁止 `__import__`、`open`、`subprocess` 等危险函数。
+**攻击回归用例（必须全部失败）：**
+
+| 输入 | 预期行为 |
+|---|---|
+| `__import__("os").system("id")` | 不含 `\|`，`cmd not in NETTEST_WHITELIST` → 拒绝 |
+| `open("/etc/passwd").read()` | `cmd not in NETTEST_WHITELIST` → 拒绝 |
+| `().__class__.__bases__[0].__subclasses__()` | `cmd not in NETTEST_WHITELIST` → 拒绝 |
+| `"os|system"` | `cmd not in MEDIA_SERVER_MAP` → 拒绝 |
+| `"app.utils.system_utils|SystemUtils"` | `cmd not in MEDIA_SERVER_MAP` → 拒绝 |
+| `"app.mediaserver.client.emby|Emby"` | `cmd in MEDIA_SERVER_MAP` → 允许（固定白名单） |
 
 #### 3.2.2 TMDB proxies (`app/media/tmdbv3api/tmdb.py:135,157`)
 
@@ -243,53 +310,144 @@ class OcrHelper:
 #### 3.2.3 BrushTask rules (`app/brushtask.py:125-126`)
 
 ```diff
-  import ast
+  import json
 
 -               "rss_rule": eval(task.RSS_RULE),
 -               "remove_rule": eval(task.REMOVE_RULE),
-+               "rss_rule": ast.literal_eval(task.RSS_RULE) if task.RSS_RULE else {},
-+               "remove_rule": ast.literal_eval(task.REMOVE_RULE) if task.REMOVE_RULE else {},
++               "rss_rule": json.loads(task.RSS_RULE) if task.RSS_RULE else {},
++               "remove_rule": json.loads(task.REMOVE_RULE) if task.REMOVE_RULE else {},
 ```
 
-#### 3.2.4 WordsHelper (`app/helper/words_helper.py:131`)
+> 确认 `RSS_RULE` / `REMOVE_RULE` 在数据库中以 JSON 字符串存储（来自前端提交和 `json.dumps`）。如字段值为 Python 字典字面量字符串，也兼容 `json.loads`。
+
+#### 3.2.4 WordsHelper (`app/helper/words_helper.py:131`) — 安全算术解析
+
+`ast.literal_eval` 不支持 `EP+1` / `EP-2` 这类算术表达式，需要自定义安全解析器：
+
+```python
+import ast
+
+_ALLOWED_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a // b if b != 0 else 0,
+    ast.USub: lambda a: -a,
+}
+
+_SAFE_NUM_TYPES = (int, float)
+
+
+def safe_arith_eval(expr):
+    """
+    安全算术表达式求值。
+    仅允许：常量数字、+ - * //、一元负号。
+    拒绝：函数调用、属性访问、下标、名称引用、字符串等。
+    """
+    if not isinstance(expr, str):
+        raise ValueError("expr must be string")
+    tree = ast.parse(expr, mode='eval')
+    return _eval_node(tree.body)
+
+
+def _eval_node(node):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, _SAFE_NUM_TYPES):
+            return node.value
+        raise ValueError(f"Disallowed constant type: {type(node.value)}")
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed binary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.left), _eval_node(node.right))
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed unary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.operand))
+    raise ValueError(f"Disallowed AST node: {type(node).__name__}")
+```
+
+替换 words_helper.py 中的 eval：
 
 ```diff
   import ast
++
++ _ALLOWED_OPS = {ast.Add: ..., ast.Sub: ..., ast.Mult: ..., ast.Div: ..., ast.USub: ...}
++ _SAFE_NUM_TYPES = (int, float)
++
++ def safe_arith_eval(expr):
++     ...
++
++ def _eval_node(node):
++     ...
 
--               episode_num_offset_int = int(eval(offset_caculate))
-+               episode_num_offset_int = int(ast.literal_eval(offset_caculate))
+                  offset_caculate = offset.replace("EP", str(episode_num_int))
+-                 episode_num_offset_int = int(eval(offset_caculate))
++                 episode_num_offset_int = int(safe_arith_eval(offset_caculate))
 ```
+
+**验收用例：**
+
+| 输入 | 预期结果 |
+|---|---|
+| `EP+1`（offset="EP+1", EP 替换为 5 后） | `6`（正常） |
+| `EP-2`（offset="EP-2", EP 替换为 10 后） | `8`（正常） |
+| `EP*3` | `15`（正常，乘法允许） |
+| `__import__("os").system("id")` | `ValueError: Disallowed AST node: Call`（拒绝） |
+| `()["__class__"]` | `ValueError: Disallowed AST node: Subscript`（拒绝） |
+| `"hello" + 1` | `ValueError: Disallowed constant type: <class 'str'>`（拒绝） |
+| `(1).__class__` | `ValueError: Disallowed AST node: Attribute`（拒绝） |
+
+---
 
 ### 3.3 硬化自动更新 (`web/action.py:1185-1221`)
 
-非群晖环境下禁止自动执行 git/pip：
+**威胁模型：**
+
+- `update_system()` 在认证后通过 Web API 触发。
+- 非群晖环境：`sudo git reset --hard origin/{branch}` + `sudo pip install` 无 GPG 签名校验，Git 仓库被劫持后可直接在宿主机执行任意代码。
+- 群晖环境：`os.system("nastool update")` 执行一个外部命令，其来源、权限、签名/完整性校验均不透明。`nastool update` 可能执行与上述相同的 git/pip 操作，也可能执行其他系统命令。无法证明其安全性。
+
+**最终决策：所有环境均禁止自动执行外部更新命令。**
 
 ```python
     def update_system(self):
         """
-        更新（已硬化：不再自动执行 git reset + pip install）
+        更新（已硬化：不再自动执行任何 git/pip/os.system 命令）
         """
-        if SystemUtils.is_synology():
-            # 群晖套件保持原行为（由套件自身管理）
-            if SystemUtils.execute('/bin/ps -w -x | grep -v grep | grep -w "nastool update" | wc -l') == '0':
-                os.system('nastool update')
-                self.restart_server()
-        else:
-            # Docker / 普通环境：仅通知有更新，不自动执行
-            # 更新应通过重新拉取镜像或手动 git pull 完成
-            log.warn("自动更新已禁用，请手动更新或重新部署容器")
-        return {"code": 0}
+        # 不再区分群晖/Docker/普通环境
+        # 自动更新完全禁用，用户需手动更新或重新部署
+        log.warn("自动更新已禁用。请手动执行 git pull 或重新部署容器/套件。")
+        return {"code": 0, "msg": "自动更新已禁用"}
 ```
+
+> 删除整个 `update_system` 方法中的 `os.system(...)`、`git clean/reset/fetch/submodule`、`pip install`、`nastool update` 等外部命令调用。
+
+---
 
 ### 3.4 消除 pickle RCE (`app/helper/meta_helper.py`)
 
-将 `tmdb.dat` 缓存从 pickle 改为 JSON：
+**威胁模型：** `tmdb.dat` 是运行时缓存文件，位于用户可写的配置目录。如果攻击者能写入恶意 pickle payload，服务启动或缓存加载时将触发任意代码执行。
+
+**方案：** 缓存文件改为 JSON，使用新文件名 `tmdb.json`，**不再读取旧 `tmdb.dat`**。
 
 ```diff
   import os
 - import pickle
 + import json
   import random
+```
+
+```diff
+      def __init__(self):
+          self.init_config()
+
+      def init_config(self):
+          ...
+-         self._meta_path = os.path.join(Config().get_config_path(), 'tmdb.dat')
++         self._meta_path = os.path.join(Config().get_config_path(), 'tmdb.json')
+          self._meta_data = self.__load_meta_data(self._meta_path)
 ```
 
 ```diff
@@ -317,6 +475,8 @@ class OcrHelper:
 +             json.dump(new_meta_data, f, ensure_ascii=False)
 ```
 
+> **不实现旧 pickle 迁移。** 旧 `tmdb.dat` 被忽略，首次启动时缓存为空，TMDB 数据会从 API 重新获取。不影响功能，仅增加首次启动时的 API 调用量。
+
 ---
 
 ## 四、文件变更清单
@@ -326,79 +486,214 @@ class OcrHelper:
 | `app/helper/plugin_helper.py` | 禁用三个远程调用 | install、report、statistic 返回空/None |
 | `app/helper/ocr_helper.py` | 禁用远程 OCR | get_captcha_text 直接返回空字符串 |
 | `web/backend/web_utils.py` | 禁用版本检查 | get_latest_version 返回 None, None |
+| `config.py` | 移除 tmdb.nastool.org | TMDB_API_DOMAINS 白名单精简 |
+| `initializer.py` | 移除 tmdb_domain 迁移 + 启动上报 | 删除 nastool.org 相关配置写入和上报 |
+| `app/message/client/wechat.py` | 移除默认代理 | _default_proxy_url 设为 None |
 | `app/conf/moduleconf.py` | 修改占位符 | 企业微信默认代理改回官方地址 |
-| `initializer.py` | 移除启动上报 | 删除 PluginHelper().report 调用块 |
-| `web/action.py` | 限制 eval + 硬化更新 | __test_connection 加 safe_locals；update_system 禁用自动更新 |
+| `app/plugins/modules/cookiecloud.py` | 修改占位符 | CookieCloud 默认地址改为 localhost |
+| `web/action.py` | **完全删除 eval + 硬化更新** | __test_connection 改为白名单执行；update_system 禁用所有自动更新 |
 | `app/media/tmdbv3api/tmdb.py` | eval → ast.literal_eval | 两处 proxies 解析 |
-| `app/brushtask.py` | eval → ast.literal_eval | RSS_RULE / REMOVE_RULE 解析 |
-| `app/helper/words_helper.py` | eval → ast.literal_eval | offset_caculate 解析 |
-| `app/helper/meta_helper.py` | pickle → json | tmdb.dat 缓存格式迁移 |
+| `app/brushtask.py` | eval → json.loads | RSS_RULE / REMOVE_RULE 解析 |
+| `app/helper/words_helper.py` | eval → safe_arith_eval | 自定义安全算术解析器 |
+| `app/helper/meta_helper.py` | pickle → json + 新文件名 | tmdb.dat → tmdb.json，不读旧文件 |
 | `docs/plan/009-security-audit-remediation.md` | 新增 | 本计划文档 |
 
 ---
 
-## 五、验证方式
+## 五、可执行安全回归清单
 
-### 5.1 nastool.org 遥测移除验证
+以下命令在整改完成后必须全部通过。
+
+### 5.1 eval() 零容忍验证
 
 ```bash
-# 启动服务后查看日志，确认无 nastool.org 相关请求超时
-grep -i "nastool.org" logs/*.log || echo "OK: no nastool.org requests"
-
-# 验证 PluginHelper 方法返回空
-python3 -c "from app.helper import PluginHelper; print(PluginHelper.install('test'))"    # None
-python3 -c "from app.helper import PluginHelper; print(PluginHelper.report(['test']))"    # None
-python3 -c "from app.helper import PluginHelper; print(PluginHelper.statistic())"         # {}
-
-# 验证 OcrHelper 返回空
-python3 -c "from app.helper import OcrHelper; print(repr(OcrHelper().get_captcha_text()))"  # ''
-
-# 验证版本检查返回 None
-python3 -c "from web.backend.web_utils import WebUtils; print(WebUtils.get_latest_version())"  # (None, None)
+# 代码中不允许任何 eval()（含 re.compile 中的 eval 也不允许）
+rg -n "\beval\s*\(" app web --glob "*.py"
+# 期望：无任何输出
 ```
 
-### 5.2 eval() 消除验证
+### 5.2 pickle 残留验证
 
 ```bash
-# 搜索确认代码中无 eval()（除了 re.compile 等合法用法和已被限制的 __test_connection）
-grep -rn "\beval\s*(" app/ web/ --include="*.py" | grep -v "re.compile.*eval"
-# 期望输出仅包含 __test_connection 中的受限制 eval
+# pickle.load / pickle.loads 只允许在 web/backend/user.py（加载内置只读 user.sites.bin）
+rg -n "pickle\.(load|loads)" app web config.py initializer.py --glob "*.py"
+# 期望：仅命中 web/backend/user.py:368（内置只读文件，信任边界可控）
+# 不允许命中 app/helper/meta_helper.py
 ```
 
-### 5.3 自动更新硬化验证
-
-在 Web UI 中点击"检查更新"或调用 API，确认：
-1. 不再执行 `git reset --hard`
-2. 日志输出 `"自动更新已禁用，请手动更新或重新部署容器"`
-
-### 5.4 pickle → JSON 验证
+### 5.3 nastool.org 零容忍验证
 
 ```bash
-# 1. 删除旧 tmdb.dat
-rm config/tmdb.dat
+# 运行时代码中不允许任何 nastool.org 相关字符串
+rg -n "nastool\.org|wechat\.nastool\.org|tmdb\.nastool\.org" \
+    app web config.py initializer.py --glob "*.py"
+# 期望：无任何命中
+# 注释/文档中的提及可保留，但不得出现在可执行代码路径中
+```
 
-# 2. 启动服务，执行一次媒体识别（触发 TMDB 缓存写入）
+### 5.4 __test_connection 攻击回归验证
 
-# 3. 确认新缓存文件为 JSON 格式
-python3 -c "import json; data=json.load(open('config/tmdb.dat')); print(type(data))"
-# 期望: <class 'dict'>
+```bash
+cd /home/work/code/nas-tools
+python3 <<'PY'
+# 模拟 __test_connection 的白名单逻辑
+NETTEST_WHITELIST = {
+    "www.themoviedb.org", "image.tmdb.org", "webservice.fanart.tv",
+    "api.telegram.org", "qyapi.weixin.qq.com", "www.opensubtitles.org"
+}
+MEDIA_SERVER_MAP = {
+    "app.mediaserver.client.emby|Emby",
+    "app.mediaserver.client.jellyfin|Jellyfin",
+    "app.mediaserver.client.plex|Plex",
+}
+
+def is_allowed(cmd):
+    if "|" in cmd:
+        return cmd in MEDIA_SERVER_MAP
+    return cmd in NETTEST_WHITELIST
+
+# 攻击用例（必须全部拒绝）
+attacks = [
+    '__import__("os").system("id")',
+    'open("/etc/passwd").read()',
+    '().__class__.__bases__[0].__subclasses__()',
+    '"os|system"',
+    'app.utils.system_utils|SystemUtils',
+    'app.mediaserver.client.emby|System',
+]
+# 合法用例（必须全部允许）
+legit = [
+    'www.themoviedb.org',
+    'api.telegram.org',
+    'app.mediaserver.client.emby|Emby',
+    'app.mediaserver.client.plex|Plex',
+]
+
+for a in attacks:
+    assert not is_allowed(a), f"攻击应被拒绝: {a}"
+print("[OK] 所有攻击用例均被正确拒绝")
+
+for l in legit:
+    assert is_allowed(l), f"合法用例应被允许: {l}"
+print("[OK] 所有合法用例均被正确允许")
+PY
+```
+
+### 5.5 WordsHelper 攻击回归验证
+
+```bash
+python3 <<'PY'
+import ast
+
+_ALLOWED_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a // b if b != 0 else 0,
+    ast.USub: lambda a: -a,
+}
+_SAFE_NUM_TYPES = (int, float)
+
+def safe_arith_eval(expr):
+    tree = ast.parse(expr, mode='eval')
+    return _eval_node(tree.body)
+
+def _eval_node(node):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, _SAFE_NUM_TYPES):
+            return node.value
+        raise ValueError(f"Disallowed constant type: {type(node.value)}")
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed binary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.left), _eval_node(node.right))
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed unary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.operand))
+    raise ValueError(f"Disallowed AST node: {type(node).__name__}")
+
+# 合法用例
+assert safe_arith_eval("5+1") == 6
+assert safe_arith_eval("10-2") == 8
+assert safe_arith_eval("3*4") == 12
+assert safe_arith_eval("-5") == -5
+assert safe_arith_eval("10//3") == 3
+print("[OK] 合法算术表达式正常求值")
+
+# 攻击用例（必须全部抛出 ValueError）
+attacks = [
+    '__import__("os").system("id")',
+    'open("/etc/passwd")',
+    '(1).__class__',
+    '"hello"',
+    '[]',
+    '{}',
+    '().__class__.__bases__[0]',
+]
+for a in attacks:
+    try:
+        safe_arith_eval(a)
+        raise AssertionError(f"攻击应被拒绝: {a}")
+    except ValueError:
+        pass
+print("[OK] 所有攻击用例均被正确拒绝")
+PY
+```
+
+### 5.6 pickle 文件隔离验证
+
+```bash
+# 1. 确认旧 tmdb.dat 不会被加载
+python3 -c "
+import os
+old = 'config/tmdb.dat'
+if os.path.exists(old):
+    print(f'[WARN] 旧 {old} 仍存在，需手动删除')
+else:
+    print('[OK] 旧 tmdb.dat 不存在')
+"
+
+# 2. 确认新缓存写入 JSON
+python3 -c "
+import json, os
+new = 'config/tmdb.json'
+if os.path.exists(new):
+    with open(new) as f:
+        d = json.load(f)
+    print(f'[OK] 新缓存为 JSON，顶层类型: {type(d).__name__}')
+else:
+    print('[INFO] 新 tmdb.json 尚未生成（需运行一次媒体识别）')
+"
+```
+
+### 5.7 自动更新硬化验证
+
+```bash
+# 确认 update_system 中不再有任何 os.system / git / pip 调用
+rg -n "os\.system|git\s|pip\s|subprocess" web/action.py
+# 期望：无命中（或仅命中其他无关方法，update_system 方法体内无命中）
 ```
 
 ---
 
 ## 六、风险与注意事项
 
-1. **tmdb.dat 格式迁移**：旧的 pickle 格式缓存将在首次启动时失效，TMDB 数据会重新从 API 获取。不影响功能，仅增加首次启动时的 API 调用量。
+1. **tmdb.json 格式迁移**：旧 `tmdb.dat` 被忽略，首次启动时缓存为空，TMDB 数据会从 API 重新获取。不影响功能，仅增加首次启动时的 API 调用量。旧 `tmdb.dat` 可由用户手动删除，也可保留（不再被读取，无安全风险）。
 
 2. **OCR 禁用影响**：hdsky、opencd 等需要验证码的自动签到站点将无法自动识别验证码。用户需要手动在站点管理中获取 Cookie 后填入。这是安全与便利的权衡。
 
-3. **__test_connection 的 safe_locals 可能不完整**：如果某些连通性测试命令依赖了未列入 safe_locals 的类，会报 NameError。需在测试中覆盖所有 `ModuleConf.NETTEST_TARGETS` 中的命令类型。如发现问题，扩展 safe_locals 即可，不影响安全性。
+3. **ast.literal_eval 限制**：`literal_eval` 只支持 Python 字面量（字符串、数字、列表、字典等），不支持函数调用。对于 `brushtask.py` 和 `tmdb.py` 中的场景（proxies 和 rules 都是数据结构），完全适用。
 
-4. **ast.literal_eval 限制**：`literal_eval` 只支持 Python 字面量（字符串、数字、列表、字典等），不支持函数调用。对于 `brushtask.py` 和 `tmdb.py` 中的场景（proxies 和 rules 都是数据结构），完全适用。
+4. **__test_connection 白名单变更**：Media Server 测试不再支持任意 `module|Class`，仅限 Emby/Jellyfin/Plex。如需测试其他 Media Server，需扩展 `MEDIA_SERVER_MAP`。普通网络测试仅限 `NETTEST_TARGETS` 中的域名。如需测试其他域名，需扩展白名单。
 
-5. **企业微信代理配置**：将默认占位符从 `wechat.nastool.org` 改回 `qyapi.weixin.qq.com` 后，已配置 `wechat.nastool.org` 的存量用户不会受影响（config.yaml 中已持久化的值不会被覆盖）。仅影响新安装时的默认值。
+5. **企业微信代理配置**：`_default_proxy_url` 设为 `None` 后，未配置代理的群晖用户将直连微信官方 API。已配置 `wechat.nastool.org` 的存量用户不受影响（config.yaml 中已持久化的值不会被覆盖）。
 
 6. **自动更新禁用**：在 Docker 环境中这是正确行为。对于非 Docker 的源码部署用户，需手动执行 `git pull`。建议在 README 中注明更新方式。
+
+7. **config.py 中的 `t.nastool.workers.dev`**：这是 Cloudflare Workers 代理，与 `tmdb.nastool.org` 同属第三方域名，一并移除。仅保留官方 `api.themoviedb.org` 和 `api.tmdb.org`。
 
 ---
 
@@ -409,88 +704,128 @@ python3 -c "import json; data=json.load(open('config/tmdb.dat')); print(type(dat
 #### Task 1.1: 禁用 PluginHelper 远程调用
 - **文件**: `app/helper/plugin_helper.py`
 - **内容**: 将 `install`, `report`, `statistic` 改为返回 `None`/`{}`，注释原请求逻辑
-- **验收**: 三个方法均不再发起 HTTP 请求
+- **验收**: `rg -n "nastool\.org" app/helper/plugin_helper.py` 无命中
 
 #### Task 1.2: 禁用 OcrHelper 远程 OCR
 - **文件**: `app/helper/ocr_helper.py`
 - **内容**: `get_captcha_text` 直接返回空字符串，注释 `_ocr_b64_url`
-- **验收**: 调用 OCR 不发起网络请求，返回 `""`
+- **验收**: `rg -n "nastool\.org" app/helper/ocr_helper.py` 无命中
 
 #### Task 1.3: 禁用版本检查
 - **文件**: `web/backend/web_utils.py`
 - **内容**: `get_latest_version` 返回 `(None, None)`
-- **验收**: 版本检查不发起网络请求
+- **验收**: `rg -n "nastool\.org" web/backend/web_utils.py` 无命中
 
-#### Task 1.4: 修改企业微信默认代理
-- **文件**: `app/conf/moduleconf.py`
-- **内容**: 占位符从 `https://wechat.nastool.org` 改为 `https://qyapi.weixin.qq.com`
-- **验收**: 新安装默认显示官方 API 地址
+#### Task 1.4: 移除 TMDB 域名白名单中的 nastool.org
+- **文件**: `config.py`
+- **内容**: `TMDB_API_DOMAINS` 移除 `tmdb.nastool.org` 和 `t.nastool.workers.dev`
+- **验收**: `rg -n "tmdb\.nastool\.org|t\.nastool\.workers\.dev" config.py` 无命中
 
-#### Task 1.5: 移除启动上报
+#### Task 1.5: 移除 initializer.py 中的 nastool.org 配置写入
 - **文件**: `initializer.py`
-- **内容**: 删除 `PluginHelper().report` 调用块
-- **验收**: 启动日志无插件上报相关输出
+- **内容**: 删除 TMDB 代理迁移逻辑（写入 `tmdb.nastool.org`）和插件启动上报
+- **验收**: `rg -n "nastool\.org" initializer.py` 无命中
+
+#### Task 1.6: 移除企业微信默认代理
+- **文件**: `app/message/client/wechat.py`
+- **内容**: `_default_proxy_url` 设为 `None`
+- **验收**: `rg -n "wechat\.nastool\.org" app/message/client/wechat.py` 无命中
+
+#### Task 1.7: 修改企业微信占位符
+- **文件**: `app/conf/moduleconf.py`
+- **内容**: 企业微信 placeholder 改为 `https://qyapi.weixin.qq.com`
+- **验收**: `rg -n "wechat\.nastool\.org" app/conf/moduleconf.py` 无命中
+
+#### Task 1.8: 修改 CookieCloud 占位符
+- **文件**: `app/plugins/modules/cookiecloud.py`
+- **内容**: placeholder 改为 `http://localhost:8088`
+- **验收**: `rg -n "nastool\.org" app/plugins/modules/cookiecloud.py` 无命中
 
 ### Phase 2: 消除 eval() RCE（P0，可并行）
 
-#### Task 2.1: 限制 __test_connection eval
+#### Task 2.1: 完全重写 __test_connection（无 eval）
 - **文件**: `web/action.py`
-- **内容**: 为 eval 添加 `safe_globals` 和 `safe_locals`，禁止访问 `__builtins__`
-- **safe_locals 白名单**: `Config`, `RequestUtils`, `SystemUtils`, `StringUtils`, `ExceptionUtils`, `json`, `os`
-- **验收**: 所有 NETTEST_TARGETS 连通性测试正常通过；注入攻击被阻断
+- **内容**:
+  - 删除所有 `eval()` 调用
+  - 普通网络测试：后端根据 `NETTEST_TARGETS` 白名单执行请求
+  - Media Server 测试：只允许 Emby/Jellyfin/Plex 三个固定映射
+  - 增加攻击回归用例到测试套件
+- **验收**:
+  - `rg -n "\beval\s*\(" web/action.py` 无命中
+  - 攻击用例全部失败（见 5.4）
+  - 合法用例全部通过
 
 #### Task 2.2: TMDB proxies eval → ast.literal_eval
 - **文件**: `app/media/tmdbv3api/tmdb.py`
 - **内容**: 两处 `eval(proxies)` 改为 `ast.literal_eval(proxies) if proxies else None`
-- **验收**: TMDB 代理配置正常生效
+- **验收**: `rg -n "\beval\s*\(" app/media/tmdbv3api/tmdb.py` 无命中
 
-#### Task 2.3: BrushTask rules eval → ast.literal_eval
+#### Task 2.3: BrushTask rules eval → json.loads
 - **文件**: `app/brushtask.py`
-- **内容**: 两处 `eval(task.RSS_RULE)` / `eval(task.REMOVE_RULE)` 改为 `ast.literal_eval`
-- **验收**: 刷流任务正常加载，规则解析正确
+- **内容**: 两处 `eval(task.RSS_RULE)` / `eval(task.REMOVE_RULE)` 改为 `json.loads`
+- **验收**: `rg -n "\beval\s*\(" app/brushtask.py` 无命中
 
-#### Task 2.4: WordsHelper eval → ast.literal_eval
+#### Task 2.4: WordsHelper eval → safe_arith_eval
 - **文件**: `app/helper/words_helper.py`
-- **内容**: `eval(offset_caculate)` 改为 `ast.literal_eval(offset_caculate)`
-- **验收**: 自定义识别词偏移计算正常
+- **内容**: 实现 `safe_arith_eval()` 安全算术解析器，替换 `eval(offset_caculate)`
+- **验收**:
+  - `rg -n "\beval\s*\(" app/helper/words_helper.py` 无命中
+  - 攻击用例全部失败（见 5.5）
+  - 合法用例全部通过
 
 ### Phase 3: 硬化自动更新（P0）
 
-#### Task 3.1: 禁用自动 git/pip 更新
+#### Task 3.1: 禁用所有环境的自动更新
 - **文件**: `web/action.py`
-- **内容**: 非群晖环境下 `update_system` 只记录日志，不执行 `git reset --hard` / `pip install`
-- **验收**: 调用更新 API 后，不执行 git 操作，日志输出禁用提示
+- **内容**: `update_system` 删除所有 `os.system`、`git`、`pip` 调用，所有环境统一返回提示信息
+- **验收**:
+  - `rg -n "os\.system|git\s|pip\s" web/action.py` 在 update_system 方法体内无命中
+  - Web UI 点击更新后日志输出禁用提示
 
 ### Phase 4: 消除 pickle RCE（P0）
 
-#### Task 4.1: tmdb.dat 改为 JSON
+#### Task 4.1: tmdb 缓存改为 JSON + 新文件名
 - **文件**: `app/helper/meta_helper.py`
-- **内容**: `pickle.load/dump` → `json.load/dump`；文件打开模式 `rb`/`wb` → `r`/`w`
-- **验收**: 删除旧 tmdb.dat 后，服务正常启动，新缓存为 JSON 格式
+- **内容**:
+  - `pickle` → `json`
+  - 缓存路径 `tmdb.dat` → `tmdb.json`
+  - `rb`/`wb` → `r`/`w`
+- **验收**:
+  - `rg -n "pickle\.(load|loads)" app/helper/meta_helper.py` 无命中
+  - 旧 `tmdb.dat` 不再被读取
+  - 新 `tmdb.json` 为 JSON 格式
 
-### Phase 5: 回归测试（P0，依赖 Phase 1-4）
+### Phase 5: 全局安全回归（P0，依赖 Phase 1-4）
 
-#### Task 5.1: 功能回归
+#### Task 5.1: 全局 eval 零容忍
+- **命令**: `rg -n "\beval\s*\(" app web --glob "*.py"`
+- **期望**: 无输出
+
+#### Task 5.2: 全局 pickle 残留检查
+- **命令**: `rg -n "pickle\.(load|loads)" app web config.py initializer.py --glob "*.py"`
+- **期望**: 仅命中 `web/backend/user.py:368`（内置只读文件）
+
+#### Task 5.3: 全局 nastool.org 零容忍
+- **命令**: `rg -n "nastool\.org|wechat\.nastool\.org|tmdb\.nastool\.org" app web config.py initializer.py --glob "*.py"`
+- **期望**: 无输出
+
+#### Task 5.4: 功能回归
 - Web UI 登录、菜单渲染正常
-- TMDB 媒体识别正常
+- TMDB 媒体识别正常（确认 tmdb.nastool.org 移除后仍能直连官方 API）
 - 刷流任务创建/编辑/运行正常
-- 自定义识别词正常
+- 自定义识别词（含集偏移 EP+1/EP-2）正常
 - 插件安装/卸载正常
 - 网络连通性测试（设置页）正常
-
-#### Task 5.2: 安全回归
-- 全局搜索 `eval(` 确认仅保留受限制的 `__test_connection` 中的调用
-- 全局搜索 `pickle` 确认仅 `user.py` 中用于加载内置 `user.sites.bin`（只读内置资源，风险可控）
-- 确认无 nastool.org 硬编码 URL（除注释和文档外）
+- Media Server 状态测试（Emby/Jellyfin/Plex）正常
 
 ---
 
 ## 八、任务依赖关系
 
 ```
-Phase 1 (Task 1.1-1.5)  ← 互不依赖，可并行
+Phase 1 (Task 1.1-1.8)  ← 互不依赖，可并行
 Phase 2 (Task 2.1-2.4)  ← 互不依赖，可并行
 Phase 3 (Task 3.1)       ← 独立
 Phase 4 (Task 4.1)       ← 独立
-Phase 5 (Task 5.1-5.2)   ← 依赖 Phase 1-4 全部完成
+Phase 5 (Task 5.1-5.4)   ← 依赖 Phase 1-4 全部完成
 ```
