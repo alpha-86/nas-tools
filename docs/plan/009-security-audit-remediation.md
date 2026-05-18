@@ -762,7 +762,7 @@ rg -n "yaml\.(load|unsafe_load)" app web --glob "*.py"
                 return func(*args, **kwargs)
 ```
 
-3. **Jellyfin/Emby**：`api_key` 在 URL query string 中是 Jellyfin/Emby 官方 API 的设计（非 NAStool 可控）。此项标记为 **外部依赖，文档提醒**。
+4. **Jellyfin/Emby**：`api_key` 在 URL query string 中是 Jellyfin/Emby 官方 API 的设计（非 NAStool 可控）。此项标记为 **外部依赖，文档提醒**。
 
 **验收命令**：
 
