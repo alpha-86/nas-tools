@@ -311,43 +311,31 @@ class Kodi(_IMediaClient):
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
-        查询 path.strContent 为 movies/tvshows 的 Kodi 库源路径
+        Kodi 按视频类型分为电影和剧集两个库
         """
-        conn = self._get_connection()
-        if not conn:
-            return []
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT idPath, strPath, strContent FROM path "
-                    "WHERE strContent IN ('movies', 'tvshows')"
-                )
-                rows = cursor.fetchall()
-                libraries = []
-                for row in rows:
-                    path_str = row['strPath']
-                    name = os.path.basename(path_str.rstrip('/\\')) or path_str
-                    library_type = MediaType.MOVIE.value if row['strContent'] == 'movies' else MediaType.TV.value
-                    libraries.append({
-                        'id': row['idPath'],
-                        'name': name,
-                        'path': path_str,
-                        'type': library_type,
-                        'image': '',
-                        'link': ''
-                    })
-                return libraries
-        except Exception as e:
-            ExceptionUtils.exception_traceback(e)
-            log.error(f"【{self.client_name}】获取媒体库列表失败：{str(e)}")
-            return []
-        finally:
-            conn.close()
+        return [
+            {
+                'id': 'movies',
+                'name': '电影',
+                'path': '',
+                'type': MediaType.MOVIE.value,
+                'image': '',
+                'link': ''
+            },
+            {
+                'id': 'tvshows',
+                'name': '剧集',
+                'path': '',
+                'type': MediaType.TV.value,
+                'image': '',
+                'link': ''
+            }
+        ]
 
     def get_items(self, parent):
         """
         获取媒体库中的所有媒体
-        :param parent: Kodi 库源的 path.idPath，通过路径前缀匹配所有子目录下的媒体
+        :param parent: 'movies' 或 'tvshows'
         """
         if not parent:
             yield {}
@@ -356,73 +344,57 @@ class Kodi(_IMediaClient):
             yield {}
         try:
             with conn.cursor() as cursor:
-                # 查询库源路径字符串
-                cursor.execute("SELECT strPath FROM path WHERE idPath = %s", (parent,))
-                row = cursor.fetchone()
-                if not row or not row.get('strPath'):
-                    yield {}
-                source_path = row['strPath']
-                prefix = source_path if source_path.endswith('/') else source_path + '/'
-
-                # 查询该库下所有电影（路径前缀匹配 + LEFT JOIN uniqueid）
-                cursor.execute(
-                    "SELECT m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title, "
-                    "p.strPath, f.strFilename, "
-                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
-                    "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
-                    "FROM movie m JOIN files f ON m.idFile = f.idFile "
-                    "JOIN path p ON f.idPath = p.idPath "
-                    "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' "
-                    "WHERE p.strPath LIKE %s "
-                    "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename",
-                    (prefix + '%',)
-                )
-                movies = cursor.fetchall()
-                for movie in movies:
-                    path_str = movie['strPath'] or ''
-                    filename = movie['strFilename'] or ''
-                    full_path = os.path.join(path_str, filename) if filename else path_str
-                    year = str(movie['premiered'][:4]) if movie['premiered'] else ''
-                    yield {
-                        'id': f"movie:{movie['idMovie']}",
-                        'library': parent,
-                        'type': 'Movie',
-                        'title': movie['title'],
-                        'originalTitle': movie['original_title'],
-                        'year': year,
-                        'tmdbid': movie.get('tmdbid'),
-                        'imdbid': movie.get('imdbid'),
-                        'path': full_path,
-                        'json': str({})
-                    }
-
-                # 查询该库下所有剧集（路径前缀匹配 + LEFT JOIN uniqueid）
-                cursor.execute(
-                    "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title, "
-                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
-                    "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
-                    "FROM tvshow t JOIN tvshowlinkpath tlp ON t.idShow = tlp.idShow "
-                    "JOIN path p ON tlp.idPath = p.idPath "
-                    "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' "
-                    "WHERE p.strPath LIKE %s "
-                    "GROUP BY t.idShow, t.c00, t.c05, t.c09",
-                    (prefix + '%',)
-                )
-                tvshows = cursor.fetchall()
-                for tvshow in tvshows:
-                    year = str(tvshow['premiered'][:4]) if tvshow['premiered'] else ''
-                    yield {
-                        'id': f"tvshow:{tvshow['idShow']}",
-                        'library': parent,
-                        'type': 'Series',
-                        'title': tvshow['title'],
-                        'originalTitle': tvshow['original_title'],
-                        'year': year,
-                        'tmdbid': tvshow.get('tmdbid'),
-                        'imdbid': tvshow.get('imdbid'),
-                        'path': '',
-                        'json': str({})
-                    }
+                if parent == 'movies':
+                    cursor.execute(
+                        "SELECT m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title, "
+                        "p.strPath, f.strFilename, "
+                        "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
+                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
+                        "FROM movie m JOIN files f ON m.idFile = f.idFile "
+                        "JOIN path p ON f.idPath = p.idPath "
+                        "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' "
+                        "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename"
+                    )
+                    for movie in cursor.fetchall():
+                        path_str = movie['strPath'] or ''
+                        filename = movie['strFilename'] or ''
+                        full_path = os.path.join(path_str, filename) if filename else path_str
+                        year = str(movie['premiered'][:4]) if movie['premiered'] else ''
+                        yield {
+                            'id': f"movie:{movie['idMovie']}",
+                            'library': parent,
+                            'type': 'Movie',
+                            'title': movie['title'],
+                            'originalTitle': movie['original_title'],
+                            'year': year,
+                            'tmdbid': movie.get('tmdbid'),
+                            'imdbid': movie.get('imdbid'),
+                            'path': full_path,
+                            'json': str({})
+                        }
+                elif parent == 'tvshows':
+                    cursor.execute(
+                        "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title, "
+                        "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
+                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
+                        "FROM tvshow t "
+                        "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' "
+                        "GROUP BY t.idShow, t.c00, t.c05, t.c09"
+                    )
+                    for tvshow in cursor.fetchall():
+                        year = str(tvshow['premiered'][:4]) if tvshow['premiered'] else ''
+                        yield {
+                            'id': f"tvshow:{tvshow['idShow']}",
+                            'library': parent,
+                            'type': 'Series',
+                            'title': tvshow['title'],
+                            'originalTitle': tvshow['original_title'],
+                            'year': year,
+                            'tmdbid': tvshow.get('tmdbid'),
+                            'imdbid': tvshow.get('imdbid'),
+                            'path': '',
+                            'json': str({})
+                        }
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取媒体列表失败：{str(e)}")
