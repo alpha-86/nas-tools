@@ -473,3 +473,106 @@ class TestKodiClient:
 
         result = kodi.get_no_exists_episodes(MockMetaInfo(), season=1, total_num=5)
         assert result == [2, 4, 5]
+
+    @patch('app.mediaserver.client.kodi.pymysql.connect')
+    def test_get_items_no_duplicate_with_multiple_uniqueid(self, mock_connect):
+        """
+        验证 LEFT JOIN uniqueid + GROUP BY 在同一媒体存在多个 uniqueid 行时不会重复 item。
+        MySQL GROUP BY 会将多行 uniqueid 聚合为一行（通过 MAX(CASE WHEN ...) 提取值），
+        MockConnection 返回的即是聚合后的结果，每个媒体恰好一行。
+        """
+        kodi = make_kodi({
+            'mysql_host': '127.0.0.1',
+            'mysql_port': '3306',
+            'mysql_user': 'kodi',
+            'mysql_password': 'pass',
+            'mysql_db': 'MyVideos119'
+        })
+        # 模拟 GROUP BY 聚合后的结果：每个媒体只有一行，tmdbid/imdbid 从多行 uniqueid 聚合而来
+        mock_conn = MockConnection([
+            # movie query：3部电影，每部都有 tmdb + imdb 两条 uniqueid 行，但 GROUP BY 后各一行
+            [
+                {'idMovie': 1, 'title': 'Movie A', 'premiered': '2020-01-01',
+                 'original_title': 'OrigA', 'strPath': '/m', 'strFilename': 'a.mkv',
+                 'tmdbid': '100', 'imdbid': 'tt100'},
+                {'idMovie': 2, 'title': 'Movie B', 'premiered': '2021-01-01',
+                 'original_title': 'OrigB', 'strPath': '/m', 'strFilename': 'b.mkv',
+                 'tmdbid': '200', 'imdbid': 'tt200'},
+                {'idMovie': 3, 'title': 'Movie C', 'premiered': '2022-01-01',
+                 'original_title': 'OrigC', 'strPath': '/m', 'strFilename': 'c.mkv',
+                 'tmdbid': '300', 'imdbid': 'tt300'},
+            ],
+            # tvshow query：2部剧，各有 tmdb + imdb uniqueid 行，GROUP BY 后各一行
+            [
+                {'idShow': 10, 'title': 'Show X', 'premiered': '2019-01-01',
+                 'original_title': 'OrigX', 'tmdbid': '500', 'imdbid': 'tt500'},
+                {'idShow': 11, 'title': 'Show Y', 'premiered': '2023-01-01',
+                 'original_title': 'OrigY', 'tmdbid': '600', 'imdbid': 'tt600'},
+            ]
+        ])
+        mock_connect.return_value = mock_conn
+        items = list(kodi.get_items(parent=1))
+        items = [i for i in items if i]
+        # 3 movies + 2 shows = 5 items，无重复
+        assert len(items) == 5
+        # 验证每个 id 唯一
+        item_ids = [i['id'] for i in items]
+        assert len(set(item_ids)) == 5
+        # 验证每个 id 恰好出现一次（无重复）
+        assert item_ids == ['movie:1', 'movie:2', 'movie:3', 'tvshow:10', 'tvshow:11']
+        # 验证 tmdbid/imdbid 正确传递
+        movie_a = next(i for i in items if i['id'] == 'movie:1')
+        assert movie_a['tmdbid'] == '100'
+        assert movie_a['imdbid'] == 'tt100'
+
+    @patch('app.mediaserver.client.kodi.pymysql.connect')
+    def test_get_items_group_by_full_columns(self, mock_connect):
+        """
+        验证 get_items() 的 GROUP BY 子句包含 SELECT 中所有非聚合列，
+        确保在 MySQL/MariaDB 默认 ONLY_FULL_GROUP_BY SQL mode 下可执行。
+
+        Movie GROUP BY 应包含: m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename
+        TVShow GROUP BY 应包含: t.idShow, t.c00, t.c05, t.c09
+        """
+        # 使用可追踪 cursor 的 MockConnection 子类
+        class TrackingConnection(MockConnection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.last_cursor = None
+
+            def cursor(self):
+                self.last_cursor = MockCursor(self._query_results)
+                return self.last_cursor
+
+        mock_conn = TrackingConnection([[], []])
+        mock_connect.return_value = mock_conn
+        kodi = make_kodi({
+            'mysql_host': '127.0.0.1',
+            'mysql_port': '3306',
+            'mysql_user': 'kodi',
+            'mysql_password': 'pass',
+            'mysql_db': 'MyVideos119'
+        })
+        list(kodi.get_items(parent=1))
+
+        cursor = mock_conn.last_cursor
+        # 应该有 2 条 SQL（movie query + tvshow query）
+        assert len(cursor.executed) == 2
+        movie_sql = cursor.executed[0][0]
+        tvshow_sql = cursor.executed[1][0]
+
+        # Movie: 非聚合列为 m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename
+        movie_group_by = "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename"
+        assert movie_group_by in movie_sql, \
+            f"Movie GROUP BY 缺少列，实际SQL: {movie_sql}"
+
+        # TVShow: 非聚合列为 t.idShow, t.c00, t.c05, t.c09
+        tvshow_group_by = "GROUP BY t.idShow, t.c00, t.c05, t.c09"
+        assert tvshow_group_by in tvshow_sql, \
+            f"TVShow GROUP BY 缺少列，实际SQL: {tvshow_sql}"
+
+        # 验证 SELECT 中的聚合列（MAX）存在
+        assert "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid" in movie_sql
+        assert "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid" in movie_sql
+        assert "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid" in tvshow_sql
+        assert "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid" in tvshow_sql
