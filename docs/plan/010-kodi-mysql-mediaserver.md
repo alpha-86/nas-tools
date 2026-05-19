@@ -18,13 +18,14 @@ Kodi 视频库数据库名随版本变化（如 `MyVideos119`、`MyVideos131`）
 
 | 表 | 说明 | 关键字段 |
 |---|---|---|
-| `movie` | 电影 | `idMovie`, `c00`(标题), `c07`(年份), `c16`(原始标题) |
-| `tvshow` | 剧集 | `idShow`, `c00`(标题), `c05`(年份), `c15`(原始标题) |
+| `movie` | 电影 | `idMovie`, `c00`(标题), `premiered`(首映日期), `c16`(原始标题) |
+| `tvshow` | 剧集 | `idShow`, `c00`(标题), `c05`(首播日期), `c09`(原始标题), `c15`(排序标题) |
 | `episode` | 单集 | `idEpisode`, `idShow`, `c00`(标题), `c12`(季号), `c13`(集号) |
 | `seasons` | 季 | `idSeason`, `idShow`, `season`(季号) |
 | `uniqueid` | 外部 ID 映射 | `media_id`, `media_type`, `type`('tmdb'/'imdb'), `value` |
 | `files` | 文件 | `idFile`, `idPath`, `strFilename` |
 | `path` | 路径 | `idPath`, `strPath` |
+| `tvshowlinkpath` | 剧集-路径关联 | `idShow`, `idPath` |
 
 > **注意**：`uniqueid` 表（Kodi 17+）是获取 TMDB/IMDB ID 的标准入口，不同版本字段位置一致，优先查此表。
 
@@ -73,11 +74,11 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 | `get_user_count()` | 固定返回 `1` | Kodi 无用户系统 |
 | `get_activity_log()` | 返回 `[]` | 不支持 |
 | `get_medias_count()` | `COUNT(movie)` / `COUNT(tvshow)` | |
-| `get_movies(title, year)` | `SELECT c00, c07 FROM movie WHERE ...` | |
+| `get_movies(title, year)` | 查 `movie` 表，`c00` 匹配标题，`premiered` 提取年份匹配 | |
 | `get_tv_episodes(item_id, title, year, tmdbid, season)` | 联查 `tvshow` → `episode` | 无 `item_id` 时先按标题查 `idShow` |
 | `get_no_exists_episodes()` | 同 Emby 模式：已有集号 → 算差集 | |
-| `get_libraries()` | `SELECT DISTINCT strPath FROM path` 聚合 | 或从 `movie.idPath` / `tvshow.idPath` 推断 |
-| `get_items(parent)` | `SELECT * FROM movie` / `tvshow` → yield 标准字典 | 包含 `uniqueid` 联查获取 tmdbid/imdbid |
+| `get_libraries()` | 从 `path` 表聚合，区分电影/剧集路径 | 见 2.5 节具体 SQL；返回 `{id, name, type, path, ...}` |
+| `get_items(parent)` | `SELECT * FROM movie` / `tvshow` → yield 标准字典 | `type` 必须为 `"Movie"` 或 `"Series"`；包含 `uniqueid` 联查 |
 | `get_play_url()` | 返回 `""` | 不支持 |
 | `get_playing_sessions()` | 返回 `[]` | 不支持 |
 | `get_webhook_message()` | 返回 `None` | 不支持 |
@@ -86,6 +87,9 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 | `get_remote_image_by_id()` | 查 `uniqueid` 取 tmdbid → `Media().get_tmdb_backdrop()` / `get_tmdb_info()` | |
 | `get_local_image_by_id()` | 同上 | 与 `get_remote_image_by_id` 行为一致 |
 | `get_episode_image_by_id()` | 查 tvshow 的 tmdbid → `Media().get_episode_images()` | |
+| `get_iteminfo()` | 查 `movie` / `tvshow` 返回详情 dict | `MediaServer` 直接调用，非抽象方法但需提供 |
+| `get_resume()` | 返回 `[]` | Kodi 无播放进度跨设备同步，空实现 |
+| `get_latest()` | 返回 `[]` | 可选实现（见 5.5 节）；第一版空实现 |
 
 ### 2.4 `get_items()` 返回的数据格式
 
@@ -93,22 +97,50 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 
 ```python
 yield {
-    "id": movie.idMovie,           # Kodi 内部 ID
-    "library": movie.idPath,       # 路径ID（作为 library 标识）
-    "type": "Movie",               # Kodi 是 'Movie'，同步逻辑兼容
-    "title": movie.c00,            # 标题
-    "originalTitle": movie.c16,    # 原始标题
-    "year": movie.c07,             # 年份
-    "tmdbid": tmdb_id,             # 从 uniqueid 表查
-    "imdbid": imdb_id,             # 从 uniqueid 表查
-    "path": full_path,             # path.strPath + files.strFilename
-    "json": str({...})             # 额外信息序列化（如 season/episode）
+    "id": movie.idMovie,              # Kodi 内部 ID
+    "library": path_id,               # path.idPath（作为 library 标识）
+    "type": "Movie",                  # 必须为 "Movie" 或 "Series"
+    "title": movie.c00,               # 标题
+    "originalTitle": movie.c16,       # 原始标题
+    "year": movie.premiered[:4],      # 从 premiered 提取年份
+    "tmdbid": tmdb_id,                # 从 uniqueid 表查
+    "imdbid": imdb_id,                # 从 uniqueid 表查
+    "path": full_path,                # path.strPath + files.strFilename
+    "json": str({...})                # 额外信息序列化（如 season/episode）
 }
 ```
 
-### 2.5 路径映射
+> **关键**：`type` 必须为 `"Movie"` 或 `"Series"`。`media_server.py:250` 只对 `['Movie', 'movie']` 和 `['Series', 'show']` 获取季/集信息；返回 `"TV"` 或 `"tvshow"` 会导致 `check_item_exists()` 缺少 episode JSON。
 
-Kodi `files` / `path` 表中的路径是 Kodi 所在机器的路径。如果 NAStools 与 Kodi 不在同一台机器/容器上，需要考虑路径映射转换（类似 Emby 的 `__get_emby_library_id_by_item` 逻辑）。
+### 2.5 `get_libraries()` 实现与路径映射
+
+Kodi 的表结构**没有** `movie.idPath` 或 `tvshow.idPath` 字段：
+- **Movie**：通过 `movie.idFile → files.idPath → path.idPath` 关联
+- **TV Show**：通过 `tvshowlinkpath.idShow → tvshowlinkpath.idPath → path.idPath` 关联
+- **Episode**：通过 `episode.idFile → files.idPath → path.idPath` 关联
+
+`get_libraries()` 返回格式（`media_server.py:238` 期望 dict 列表）：
+
+```python
+[
+    {
+        "id": path_id,           # path.idPath
+        "name": path_name,       # path.strPath 最后一级目录名
+        "path": strPath,
+        "type": "movie" | "tv",  # 根据该路径下媒体类型推断
+        "image": "",             # 本地图片，Kodi 无对外服务，留空
+        "link": ""               # 播放链接，Kodi 无 Web 界面，留空
+    }
+]
+```
+
+路径推断策略：
+1. 收集所有 `path` 记录
+2. 根据 `files` + `movie` 关联标记含电影的路径
+3. 根据 `tvshowlinkpath` 关联标记含剧集的路径
+4. 同名路径合并为一个 library dict
+
+路径映射：Kodi `path.strPath` 中的路径是 Kodi 所在机器的路径。如果 NAStools 与 Kodi 不在同一台机器/容器上，需要考虑路径映射转换（类似 Emby 的 `__get_emby_library_id_by_item` 逻辑）。
 
 > **注意**：路径映射可能需要在配置中提供 `path_mapping` 字段，将 Kodi 路径映射到 NAStools 可见路径。第一版可先不做，标注为后续增强。
 
@@ -213,7 +245,8 @@ kodi:
 | 实现剧集方法 | `kodi.py` | `get_tv_episodes`, `get_no_exists_episodes` |
 | 实现库遍历方法 | `kodi.py` | `get_libraries`, `get_items` |
 | 实现图片方法 | `kodi.py` | `get_remote_image_by_id`, `get_local_image_by_id`, `get_episode_image_by_id` |
-| 空实现不支持方法 | `kodi.py` | `get_play_url`, `get_playing_sessions`, `get_activity_log`, `get_webhook_message`, `refresh_root_library`, `refresh_library_by_items` |
+| 实现 `get_iteminfo` | `kodi.py` | `MediaServer` 直接调用，非抽象但必须提供 |
+| 空实现不支持方法 | `kodi.py` | `get_play_url`, `get_playing_sessions`, `get_activity_log`, `get_webhook_message`, `refresh_root_library`, `refresh_library_by_items`, `get_resume`, `get_latest` |
 
 ### Phase 3: 测试与验证 [P1]
 
@@ -275,6 +308,19 @@ kodi:
 
 **决策**：采用方案 A，保留同步逻辑。Kodi MySQL 查询比 HTTP API 快，同步成本很低。
 
+### 5.5 `get_resume` / `get_latest` 是否支持
+
+`MediaServer.get_resume()` 和 `get_latest()` 直接调用客户端方法（非抽象方法）。
+
+| 能力 | 现状 | 决策 |
+|---|---|---|
+| `get_resume`（继续观看） | Kodi 无跨设备播放进度同步，返回 `[]` | **第一版空实现** |
+| `get_latest`（最近添加） | 可通过 MySQL `files.dateAdded` 排序查询实现 | **第一版空实现，标注为 P1 增强** |
+
+**决策**：第一版两者均空实现，确保不报错。`get_latest` 在 Phase 4 中可通过 `files.dateAdded` 联查 `movie`/`tvshow`/`episode` 实现，作为后续增强项。
+
+> **理由**：`get_resume` 依赖 Kodi 的播放状态（`player` 表），而 Kodi 未启动时无实时播放数据；`get_latest` 虽然可从 MySQL 的 `dateAdded` 获取，但 `MediaServer` 层的调用链路需要完整测试，第一版优先保证核心同步和查重功能。
+
 ---
 
 ## 6. 验收标准
@@ -284,7 +330,7 @@ kodi:
 - [ ] Web 设置页可配置 Kodi MySQL 连接参数，测试连接按钮返回成功
 - [ ] `sync_mediaserver()` 可将 Kodi MySQL 中的电影/剧集数据同步到本地 `MEDIASYNCITEMS`
 - [ ] `check_item_exists()` 对 Kodi 同步的数据生效，可正确识别已存在媒体
-- [ ] 图片通过 TMDB ID 获取，通知消息中 Kodi 媒体可显示海报/背景图
+- [ ] 图片通过 TMDB ID 获取，媒体详情页和库视图中 Kodi 媒体可显示海报/背景图（通知消息因无 Webhook 不可触发）
 - [ ] 不支持的方法（刷新、播放链接、Webhook）做空实现，不报错
 - [ ] 单元测试覆盖 `get_movies`, `get_tv_episodes`, `get_items`, `get_medias_count`
 
@@ -296,8 +342,9 @@ kodi:
 
 ```sql
 -- 电影列表（含路径和外部ID）
+-- movie 无 idPath，通过 movie.idFile -> files.idPath -> path 关联
 SELECT
-    m.idMovie, m.c00 AS title, m.c07 AS year, m.c16 AS original_title,
+    m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title,
     p.strPath, f.strFilename,
     (SELECT value FROM uniqueid WHERE media_id = m.idMovie AND media_type = 'movie' AND type = 'tmdb' LIMIT 1) AS tmdbid,
     (SELECT value FROM uniqueid WHERE media_id = m.idMovie AND media_type = 'movie' AND type = 'imdb' LIMIT 1) AS imdbid
@@ -305,9 +352,9 @@ FROM movie m
 JOIN files f ON m.idFile = f.idFile
 JOIN path p ON f.idPath = p.idPath;
 
--- 剧集列表
+-- 剧集列表（tvshow 无 idPath，通过 tvshowlinkpath 关联）
 SELECT
-    t.idShow, t.c00 AS title, t.c05 AS year, t.c15 AS original_title,
+    t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title,
     (SELECT value FROM uniqueid WHERE media_id = t.idShow AND media_type = 'tvshow' AND type = 'tmdb' LIMIT 1) AS tmdbid,
     (SELECT value FROM uniqueid WHERE media_id = t.idShow AND media_type = 'tvshow' AND type = 'imdb' LIMIT 1) AS imdbid
 FROM tvshow t;
@@ -321,6 +368,16 @@ WHERE idShow = ? AND c12 = ?;
 SELECT
     (SELECT COUNT(*) FROM movie) AS movie_count,
     (SELECT COUNT(*) FROM tvshow) AS tv_count;
+
+-- 路径/library 推断（区分电影/剧集路径）
+SELECT DISTINCT p.idPath, p.strPath, 'movie' AS media_type
+FROM path p
+JOIN files f ON p.idPath = f.idPath
+JOIN movie m ON f.idFile = m.idFile
+UNION
+SELECT DISTINCT p.idPath, p.strPath, 'tv' AS media_type
+FROM path p
+JOIN tvshowlinkpath tlp ON p.idPath = tlp.idPath;
 ```
 
 ### 7.2 Kodi 版本与数据库名对照
