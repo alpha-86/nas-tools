@@ -78,7 +78,7 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 | `get_tv_episodes(item_id, title, year, tmdbid, season)` | 联查 `tvshow` → `episode` | 无 `item_id` 时先按标题查 `idShow` |
 | `get_no_exists_episodes()` | 同 Emby 模式：已有集号 → 算差集 | |
 | `get_libraries()` | 从 `path` 表聚合，区分电影/剧集路径 | 见 2.5 节具体 SQL；返回 `{id, name, type, path, ...}` |
-| `get_items(parent)` | `SELECT * FROM movie` / `tvshow` → yield 标准字典 | `type` 必须为 `"Movie"` 或 `"Series"`；包含 `uniqueid` 联查 |
+| `get_items(parent)` | 按 `parent`（`path.idPath`）过滤后查 `movie` / `tvshow` → yield 标准字典 | `type` 必须为 `"Movie"` 或 `"Series"`；包含 `uniqueid` 联查 |
 | `get_play_url()` | 返回 `""` | 不支持 |
 | `get_playing_sessions()` | 返回 `[]` | 不支持 |
 | `get_webhook_message()` | 返回 `None` | 不支持 |
@@ -93,7 +93,7 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 
 ### 2.4 `get_items()` 返回的数据格式
 
-`MediaServer.sync_mediaserver()` 会把 `get_items()` 的结果写入本地 SQLite。返回格式必须与其他服务器一致：
+`MediaServer.sync_mediaserver()` 会把 `get_items()` 的结果写入本地 SQLite。`get_items(parent)` 接收 `parent` 参数（即 `path.idPath`），只返回该 library 下的媒体。返回格式必须与其他服务器一致：
 
 ```python
 yield {
@@ -111,6 +111,8 @@ yield {
 ```
 
 > **关键**：`type` 必须为 `"Movie"` 或 `"Series"`。`media_server.py:250` 只对 `['Movie', 'movie']` 和 `['Series', 'show']` 获取季/集信息；返回 `"TV"` 或 `"tvshow"` 会导致 `check_item_exists()` 缺少 episode JSON。
+
+> **Library 过滤**：`parent` 即 `get_libraries()` 返回的 `path.idPath`。电影通过 `files.idPath = parent` 过滤；剧集通过 `tvshowlinkpath.idPath = parent` 过滤。
 
 ### 2.5 `get_libraries()` 实现与路径映射
 
@@ -234,7 +236,23 @@ kodi:
 | 添加 `MediaServerType.KODI` | `app/utils/types.py` | 枚举新增 |
 | 添加 `MEDIASERVER_CONF["kodi"]` | `app/conf/moduleconf.py` | UI 配置表单 |
 | 添加默认 `kodi` 配置 | `config/config.yaml` | 默认连接参数 |
+| 更新测试连接白名单 | `web/action.py` | import `Kodi` 类并加入 `MEDIA_SERVER_MAP` |
 | 确认/安装 `pymysql` | `requirements.txt` | 如缺失则添加 |
+
+**web/action.py 白名单修改详情**：
+
+```python
+# 1. 新增 import（line 33 附近）
+from app.mediaserver.client.kodi import Kodi
+
+# 2. MEDIA_SERVER_MAP 新增条目（line 1636 附近）
+MEDIA_SERVER_MAP = {
+    "app.mediaserver.client.emby|Emby": Emby,
+    "app.mediaserver.client.jellyfin|Jellyfin": Jellyfin,
+    "app.mediaserver.client.plex|Plex": Plex,
+    "app.mediaserver.client.kodi|Kodi": Kodi,  # 新增
+}
+```
 
 ### Phase 2: Kodi 客户端实现 [P0]
 
@@ -343,6 +361,7 @@ kodi:
 ```sql
 -- 电影列表（含路径和外部ID）
 -- movie 无 idPath，通过 movie.idFile -> files.idPath -> path 关联
+-- parent 即 path.idPath，用 %s 占位（PyMySQL 参数风格）
 SELECT
     m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title,
     p.strPath, f.strFilename,
@@ -350,19 +369,23 @@ SELECT
     (SELECT value FROM uniqueid WHERE media_id = m.idMovie AND media_type = 'movie' AND type = 'imdb' LIMIT 1) AS imdbid
 FROM movie m
 JOIN files f ON m.idFile = f.idFile
-JOIN path p ON f.idPath = p.idPath;
+JOIN path p ON f.idPath = p.idPath
+WHERE f.idPath = %s;
 
 -- 剧集列表（tvshow 无 idPath，通过 tvshowlinkpath 关联）
+-- parent 即 path.idPath，用 %s 占位
 SELECT
     t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title,
     (SELECT value FROM uniqueid WHERE media_id = t.idShow AND media_type = 'tvshow' AND type = 'tmdb' LIMIT 1) AS tmdbid,
     (SELECT value FROM uniqueid WHERE media_id = t.idShow AND media_type = 'tvshow' AND type = 'imdb' LIMIT 1) AS imdbid
-FROM tvshow t;
+FROM tvshow t
+JOIN tvshowlinkpath tlp ON t.idShow = tlp.idShow
+WHERE tlp.idPath = %s;
 
--- 某剧集的集信息
+-- 某剧集的集信息（PyMySQL 参数风格）
 SELECT c12 AS season, c13 AS episode, c00 AS title
 FROM episode
-WHERE idShow = ? AND c12 = ?;
+WHERE idShow = %s AND c12 = %s;
 
 -- 媒体数量统计
 SELECT
