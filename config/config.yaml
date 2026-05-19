@@ -148,6 +148,19 @@ plex:
   # 【Plex用户密码】
   password:
 
+# 配置Kodi MySQL视频库信息
+kodi:
+  # 【Kodi MySQL服务器地址】
+  mysql_host: 127.0.0.1
+  # 【Kodi MySQL端口】
+  mysql_port: 3306
+  # 【Kodi MySQL用户名】
+  mysql_user: kodi
+  # 【Kodi MySQL密码】
+  mysql_password:
+  # 【Kodi视频库数据库名】：如MyVideos119，需与Kodi版本对应
+  mysql_db: MyVideos119
+
 # 【配置站点搜索信息】
 pt:
   #【聚合搜索使用的检索器】：builtin

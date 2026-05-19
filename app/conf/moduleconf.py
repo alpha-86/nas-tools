@@ -795,6 +795,48 @@ class ModuleConf(object):
                 }
             }
         },
+        "kodi": {
+            "name": "Kodi",
+            "img_url": "../static/img/mediaserver/kodi.png",
+            "background": "bg-blue",
+            "test_command": "app.mediaserver.client.kodi|Kodi",
+            "config": {
+                "mysql_host": {
+                    "id": "kodi.mysql_host",
+                    "required": True,
+                    "title": "MySQL 服务器地址",
+                    "type": "text",
+                    "placeholder": "127.0.0.1"
+                },
+                "mysql_port": {
+                    "id": "kodi.mysql_port",
+                    "required": True,
+                    "title": "MySQL 端口",
+                    "type": "text",
+                    "placeholder": "3306"
+                },
+                "mysql_user": {
+                    "id": "kodi.mysql_user",
+                    "required": True,
+                    "title": "MySQL 用户名",
+                    "type": "text"
+                },
+                "mysql_password": {
+                    "id": "kodi.mysql_password",
+                    "required": True,
+                    "title": "MySQL 密码",
+                    "type": "password"
+                },
+                "mysql_db": {
+                    "id": "kodi.mysql_db",
+                    "required": True,
+                    "title": "数据库名",
+                    "tooltip": "如 MyVideos119，需与 Kodi 版本对应",
+                    "type": "text",
+                    "placeholder": "MyVideos119"
+                }
+            }
+        },
     }
 
     # 索引器

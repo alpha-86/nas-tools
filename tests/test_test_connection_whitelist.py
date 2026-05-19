@@ -20,6 +20,7 @@ MEDIA_SERVER_MAP = {
     "app.mediaserver.client.emby|Emby",
     "app.mediaserver.client.jellyfin|Jellyfin",
     "app.mediaserver.client.plex|Plex",
+    "app.mediaserver.client.kodi|Kodi",
 }
 
 
@@ -36,6 +37,7 @@ class TestTestConnectionWhitelist:
         assert is_allowed("app.mediaserver.client.emby|Emby")
         assert is_allowed("app.mediaserver.client.jellyfin|Jellyfin")
         assert is_allowed("app.mediaserver.client.plex|Plex")
+        assert is_allowed("app.mediaserver.client.kodi|Kodi")
 
     def test_media_server_rejected(self):
         assert not is_allowed("app.utils.system_utils|SystemUtils")

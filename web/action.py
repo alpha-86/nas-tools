@@ -33,6 +33,7 @@ from app.mediaserver import MediaServer
 from app.mediaserver.client.emby import Emby
 from app.mediaserver.client.jellyfin import Jellyfin
 from app.mediaserver.client.plex import Plex
+from app.mediaserver.client.kodi import Kodi
 from app.message import Message, MessageCenter
 from app.plugins import PluginManager, EventManager
 from app.rss import Rss
@@ -1637,6 +1638,7 @@ class WebAction:
                 "app.mediaserver.client.emby|Emby": Emby,
                 "app.mediaserver.client.jellyfin|Jellyfin": Jellyfin,
                 "app.mediaserver.client.plex|Plex": Plex,
+                "app.mediaserver.client.kodi|Kodi": Kodi,
             }
             # 网络测试白名单（来自 ModuleConf.NETTEST_TARGETS）
             NETTEST_WHITELIST = set(ModuleConf.NETTEST_TARGETS)
