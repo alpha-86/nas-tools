@@ -75,7 +75,7 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 | `get_activity_log()` | 返回 `[]` | 不支持 |
 | `get_medias_count()` | `COUNT(movie)` / `COUNT(tvshow)` | |
 | `get_movies(title, year)` | 查 `movie` 表，`c00` 匹配标题，`premiered` 提取年份匹配 | |
-| `get_tv_episodes(item_id, title, year, tmdbid, season)` | 联查 `tvshow` → `episode` | 无 `item_id` 时先按标题查 `idShow` |
+| `get_tv_episodes(item_id, title, year, tmdbid, season)` | 联查 `tvshow` → `episode` | 需先解析 `item_id` 前缀（如 `tvshow:1` → `1`）；无 `item_id` 时先按标题查 `idShow` |
 | `get_no_exists_episodes()` | 同 Emby 模式：已有集号 → 算差集 | |
 | `get_libraries()` | 从 `path` 表聚合，区分电影/剧集路径 | 见 2.5 节具体 SQL；返回 `{id, name, type, path, ...}` |
 | `get_items(parent)` | 按 `parent`（`path.idPath`）过滤后查 `movie` / `tvshow` → yield 标准字典 | `type` 必须为 `"Movie"` 或 `"Series"`；包含 `uniqueid` 联查 |
@@ -84,10 +84,10 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 | `get_webhook_message()` | 返回 `None` | 不支持 |
 | `refresh_root_library()` | 返回 `False` | 不支持 |
 | `refresh_library_by_items()` | 返回 `None` | 不支持 |
-| `get_remote_image_by_id()` | 查 `uniqueid` 取 tmdbid → `Media().get_tmdb_backdrop()` / `get_tmdb_info()` | |
-| `get_local_image_by_id()` | 同上 | 与 `get_remote_image_by_id` 行为一致 |
-| `get_episode_image_by_id()` | 查 tvshow 的 tmdbid → `Media().get_episode_images()` | |
-| `get_iteminfo()` | 查 `movie` / `tvshow` 返回详情 dict | `MediaServer` 直接调用，非抽象方法但需提供 |
+| `get_remote_image_by_id()` | 查 `uniqueid` 取 tmdbid → `Media().get_tmdb_backdrop()` / `get_tmdb_info()` | 需先解析 `item_id` 前缀 |
+| `get_local_image_by_id()` | 同上 | 与 `get_remote_image_by_id` 行为一致；需先解析 `item_id` 前缀 |
+| `get_episode_image_by_id()` | 查 tvshow 的 tmdbid → `Media().get_episode_images()` | 需先解析 `item_id` 前缀 |
+| `get_iteminfo()` | 查 `movie` / `tvshow` 返回详情 dict | `MediaServer` 直接调用，非抽象方法但需提供；需先解析 `item_id` 前缀 |
 | `get_resume()` | 返回 `[]` | Kodi 无播放进度跨设备同步，空实现 |
 | `get_latest()` | 返回 `[]` | 可选实现（见 5.5 节）；第一版空实现 |
 
@@ -97,7 +97,7 @@ Kodi 无对外图片服务，图片**全部走 TMDB**：
 
 ```python
 yield {
-    "id": movie.idMovie,              # Kodi 内部 ID
+    "id": f"movie:{movie.idMovie}",   # 命名空间前缀，避免 movie/tvshow ID 冲突
     "library": path_id,               # path.idPath（作为 library 标识）
     "type": "Movie",                  # 必须为 "Movie" 或 "Series"
     "title": movie.c00,               # 标题
@@ -108,9 +108,12 @@ yield {
     "path": full_path,                # path.strPath + files.strFilename
     "json": str({...})                # 额外信息序列化（如 season/episode）
 }
+# 剧集同理："id": f"tvshow:{tvshow.idShow}"
 ```
 
 > **关键**：`type` 必须为 `"Movie"` 或 `"Series"`。`media_server.py:250` 只对 `['Movie', 'movie']` 和 `['Series', 'show']` 获取季/集信息；返回 `"TV"` 或 `"tvshow"` 会导致 `check_item_exists()` 缺少 episode JSON。
+
+> **ID 命名空间**：Kodi 的 `idMovie` 和 `idShow` 是各自独立的自增序列，可能重合（如电影 id=1 和剧集 idShow=1）。`MediaDb.insert()` 按 `SERVER + ITEM_ID` 唯一键删除后插入，同名 ID 会互相覆盖。因此 Kodi 的 `get_items()` 返回的 `id` 必须带前缀，如 `movie:1`、`tvshow:1`。所有接收 `item_id` 的 Kodi 方法（`get_iteminfo`、`get_remote_image_by_id`、`get_local_image_by_id`、`get_episode_image_by_id`、`get_play_url`、`get_tv_episodes`）都必须能解析该前缀，提取原始数字 ID。
 
 > **Library 过滤**：`parent` 即 `get_libraries()` 返回的 `path.idPath`。电影通过 `files.idPath = parent` 过滤；剧集通过 `tvshowlinkpath.idPath = parent` 过滤。
 
@@ -264,6 +267,7 @@ MEDIA_SERVER_MAP = {
 | 实现库遍历方法 | `kodi.py` | `get_libraries`, `get_items` |
 | 实现图片方法 | `kodi.py` | `get_remote_image_by_id`, `get_local_image_by_id`, `get_episode_image_by_id` |
 | 实现 `get_iteminfo` | `kodi.py` | `MediaServer` 直接调用，非抽象但必须提供 |
+| 实现 ID 前缀解析 | `kodi.py` | 私有方法 `__parse_item_id(item_id)`，统一处理 `movie:N` / `tvshow:N` → `(type, raw_id)` |
 | 空实现不支持方法 | `kodi.py` | `get_play_url`, `get_playing_sessions`, `get_activity_log`, `get_webhook_message`, `refresh_root_library`, `refresh_library_by_items`, `get_resume`, `get_latest` |
 
 ### Phase 3: 测试与验证 [P1]
@@ -274,6 +278,7 @@ MEDIA_SERVER_MAP = {
 | 连接测试 | `kodi.py` | `get_status()` 连通性验证 |
 | 同步测试 | `media_server.py` | 验证 `sync_mediaserver()` 可正常将 Kodi 数据写入 `MEDIASYNCITEMS` |
 | 查重测试 | `media_server.py` | 验证 `check_item_exists()` 对 Kodi 数据生效 |
+| 更新白名单测试 | `tests/test_test_connection_whitelist.py` | `MEDIA_SERVER_MAP` 新增 `app.mediaserver.client.kodi\|Kodi` |
 | UI 配置测试 | 手工 | 在 Web 设置页配置 Kodi，测试连接按钮 |
 
 ### Phase 4: 文档 [P1]
