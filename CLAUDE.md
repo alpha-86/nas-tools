@@ -42,21 +42,26 @@ pip install -r requirements.txt
 
 ### 测试流程
 
-**禁止重新打包 Docker 镜像**。测试时直接登录到运行中的容器内，用 git 拉取对应分支或 PR：
+**禁止重新打包 Docker 镜像**。使用项目自带的部署脚本一键部署指定分支到运行中的容器：
 
 ```bash
-# 登录容器
+# 部署 main 分支（默认）
+./scripts/deploy_docker.sh
+
+# 部署指定分支
+./scripts/deploy_docker.sh security/009-audit-remediation
+```
+
+脚本会自动完成：检查容器状态 → `git fetch` → `git checkout` → 重启 `NAStool` 服务 → 验证进程存活。
+
+如需手动操作，可登录容器执行：
+
+```bash
 docker exec -it nastools /bin/sh
-
-# 进入项目目录
 cd /nas-tools
-
-# 拉取对应分支（示例）
 git fetch origin
-git checkout origin/security/009-audit-remediation
-
-# 重启容器内服务使改动生效
-# （根据容器内的 init 系统，通常是 s6-svc 或 kill 主进程）
+git checkout origin/<branch>
+s6-svc -r /run/service/NAStool
 ```
 
 ### 容器内 Git 状态说明
