@@ -225,17 +225,21 @@ class Kodi(_IMediaClient):
                         item_id=None,
                         title=None,
                         year=None,
-                        tmdb_id=None,
-                        season=None):
+                        tmdbid=None,
+                        season=None,
+                        **kwargs):
         """
         根据标题和年份和季，返回剧集列表
         :param item_id: 媒体源ID（带前缀如 tvshow:1）
         :param title: 标题
         :param year: 年份
-        :param tmdb_id: TMDBID
+        :param tmdbid: TMDBID
         :param season: 季
         :return: 集号的列表
         """
+        # 向后兼容：旧的 tmdb_id 参数
+        if tmdbid is None and 'tmdb_id' in kwargs:
+            tmdbid = kwargs['tmdb_id']
         conn = self._get_connection()
         if not conn:
             return None
@@ -262,9 +266,9 @@ class Kodi(_IMediaClient):
                     return []
 
                 # 验证tmdbid是否相同
-                if tmdb_id:
+                if tmdbid:
                     item_tmdbid = self.__get_tmdb_id(show_id, 'tvshow')
-                    if item_tmdbid and str(tmdb_id) != str(item_tmdbid):
+                    if item_tmdbid and str(tmdbid) != str(item_tmdbid):
                         return []
 
                 # 查询集信息
@@ -296,7 +300,7 @@ class Kodi(_IMediaClient):
             season = 1
         exists_episodes = self.get_tv_episodes(title=meta_info.title,
                                                year=meta_info.year,
-                                               tmdb_id=meta_info.tmdb_id,
+                                               tmdbid=meta_info.tmdb_id,
                                                season=season)
         if not isinstance(exists_episodes, list):
             return None
@@ -383,59 +387,61 @@ class Kodi(_IMediaClient):
             yield {}
         try:
             with conn.cursor() as cursor:
-                # 查询电影
+                # 查询电影（一次性 LEFT JOIN uniqueid 获取 tmdb/imdb）
                 cursor.execute(
                     "SELECT m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title, "
-                    "p.strPath, f.strFilename "
+                    "p.strPath, f.strFilename, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
+                    "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
                     "FROM movie m JOIN files f ON m.idFile = f.idFile "
                     "JOIN path p ON f.idPath = p.idPath "
-                    "WHERE f.idPath = %s",
+                    "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' "
+                    "WHERE f.idPath = %s "
+                    "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename",
                     (parent,)
                 )
                 movies = cursor.fetchall()
                 for movie in movies:
-                    movie_id = movie['idMovie']
-                    tmdbid = self.__get_tmdb_id(movie_id, 'movie')
-                    imdbid = self.__get_imdb_id(movie_id, 'movie')
                     path_str = movie['strPath'] or ''
                     filename = movie['strFilename'] or ''
                     full_path = os.path.join(path_str, filename) if filename else path_str
                     year = str(movie['premiered'][:4]) if movie['premiered'] else ''
                     yield {
-                        'id': f"movie:{movie_id}",
+                        'id': f"movie:{movie['idMovie']}",
                         'library': parent,
                         'type': 'Movie',
                         'title': movie['title'],
                         'originalTitle': movie['original_title'],
                         'year': year,
-                        'tmdbid': tmdbid,
-                        'imdbid': imdbid,
+                        'tmdbid': movie.get('tmdbid'),
+                        'imdbid': movie.get('imdbid'),
                         'path': full_path,
                         'json': str({})
                     }
 
-                # 查询剧集
+                # 查询剧集（一次性 LEFT JOIN uniqueid 获取 tmdb/imdb）
                 cursor.execute(
-                    "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title "
+                    "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
+                    "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
                     "FROM tvshow t JOIN tvshowlinkpath tlp ON t.idShow = tlp.idShow "
-                    "WHERE tlp.idPath = %s",
+                    "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' "
+                    "WHERE tlp.idPath = %s "
+                    "GROUP BY t.idShow, t.c00, t.c05, t.c09",
                     (parent,)
                 )
                 tvshows = cursor.fetchall()
                 for tvshow in tvshows:
-                    show_id = tvshow['idShow']
-                    tmdbid = self.__get_tmdb_id(show_id, 'tvshow')
-                    imdbid = self.__get_imdb_id(show_id, 'tvshow')
                     year = str(tvshow['premiered'][:4]) if tvshow['premiered'] else ''
                     yield {
-                        'id': f"tvshow:{show_id}",
+                        'id': f"tvshow:{tvshow['idShow']}",
                         'library': parent,
                         'type': 'Series',
                         'title': tvshow['title'],
                         'originalTitle': tvshow['original_title'],
                         'year': year,
-                        'tmdbid': tmdbid,
-                        'imdbid': imdbid,
+                        'tmdbid': tvshow.get('tmdbid'),
+                        'imdbid': tvshow.get('imdbid'),
                         'path': '',
                         'json': str({})
                     }
@@ -505,7 +511,8 @@ class Kodi(_IMediaClient):
             return None
 
         try:
-            if image_type and image_type.lower() == 'poster':
+            poster_types = {'poster', 'primary'}
+            if image_type and image_type.lower() in poster_types:
                 tmdb_info = Media().get_tmdb_info(mtype=mtype, tmdbid=tmdbid, chinese=False)
                 if tmdb_info and tmdb_info.get('poster_path'):
                     return Config().get_tmdbimage_url(tmdb_info.get('poster_path'), prefix='w500')

@@ -6,6 +6,7 @@ Task 12.3: __test_connection 白名单测试（P0）
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+os.environ.setdefault('NASTOOL_CONFIG', os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml'))
 
 import pytest
 from unittest.mock import MagicMock, patch
