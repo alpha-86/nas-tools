@@ -45,12 +45,16 @@
       {% for Library in Librarys %}
         {% if LibrarySyncConf and Library.id|string in LibrarySyncConf %}
         {% set theLibLink = Library.link %}
-          {% if "127.0.0.1" in theLibLink[0:16] %}
-            {% set theLibLink = theLibLink|replace("127.0.0.1",curdomainleft,1) %}
-          {% elif "localhost" in theLibLink[0:16] %}
-            {% set theLibLink = theLibLink|replace("localhost",curdomainleft,1) %}
+          {% if theLibLink %}
+            {% if "127.0.0.1" in theLibLink[0:16] %}
+              {% set theLibLink = theLibLink|replace("127.0.0.1",curdomainleft,1) %}
+            {% elif "localhost" in theLibLink[0:16] %}
+              {% set theLibLink = theLibLink|replace("localhost",curdomainleft,1) %}
+            {% endif %}
+            <a class="card card-link-pop rounded-3 overflow-hidden library-{{ Library.id }}" href="{{ theLibLink }}" target="_blank">
+          {% else %}
+            <div class="card rounded-3 overflow-hidden library-{{ Library.id }}">
           {% endif %}
-          <a class="card card-link-pop rounded-3 overflow-hidden library-{{ Library.id }}" href="{{ theLibLink }}" target="_blank">
           {% if Library.image %}
             <custom-img img-class="w-100"
                         img-src="{{ Library.image }}"
@@ -63,7 +67,11 @@
             <div class="m-2 text-center">
               {{ Library.name }}
             </div>
-          </a>
+          {% if theLibLink %}
+            </a>
+          {% else %}
+            </div>
+          {% endif %}
         {% endif %}
       {% endfor %}
     </div>
