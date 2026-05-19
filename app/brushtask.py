@@ -1,3 +1,5 @@
+import ast
+import json
 import re
 import sys
 import time
@@ -18,6 +20,24 @@ from app.utils import StringUtils, ExceptionUtils
 from app.utils.commons import singleton
 from app.utils.types import BrushDeleteType
 from config import BRUSH_REMOVE_TORRENTS_INTERVAL, Config
+
+
+def _load_rule(rule_str):
+    if not rule_str:
+        return {}
+    try:
+        val = json.loads(rule_str)
+        if isinstance(val, dict):
+            return val
+        return {}
+    except (json.JSONDecodeError, ValueError):
+        try:
+            val = ast.literal_eval(rule_str)
+            if isinstance(val, dict):
+                return val
+            return {}
+        except (ValueError, SyntaxError):
+            return {}
 
 
 @singleton
@@ -122,8 +142,8 @@ class BrushTask(object):
                 "transfer": True if task.TRANSFER == "Y" else False,
                 "sendmessage": True if task.SENDMESSAGE == "Y" else False,
                 "free": task.FREELEECH,
-                "rss_rule": eval(task.RSS_RULE),
-                "remove_rule": eval(task.REMOVE_RULE),
+                "rss_rule": _load_rule(task.RSS_RULE),
+                "remove_rule": _load_rule(task.REMOVE_RULE),
                 "seed_size": task.SEED_SIZE,
                 "total_size": total_size,
                 "rss_url": task.RSSURL if task.RSSURL else site_info.get("rssurl"),

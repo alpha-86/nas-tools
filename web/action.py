@@ -30,6 +30,9 @@ from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
 from app.media.meta import MetaInfo, MetaBase
 from app.mediaserver import MediaServer
+from app.mediaserver.client.emby import Emby
+from app.mediaserver.client.jellyfin import Jellyfin
+from app.mediaserver.client.plex import Plex
 from app.message import Message, MessageCenter
 from app.plugins import PluginManager, EventManager
 from app.rss import Rss
@@ -1184,42 +1187,12 @@ class WebAction:
 
     def update_system(self):
         """
-        更新
+        更新（已硬化：不再自动执行任何 git/pip/os.system 命令）
         """
-        # 升级
-        if SystemUtils.is_synology():
-            if SystemUtils.execute('/bin/ps -w -x | grep -v grep | grep -w "nastool update" | wc -l') == '0':
-                # 调用群晖套件内置命令升级
-                os.system('nastool update')
-                # 重启
-                self.restart_server()
-        else:
-            # 清除git代理
-            os.system("sudo git config --global --unset http.proxy")
-            os.system("sudo git config --global --unset https.proxy")
-            # 设置git代理
-            proxy = Config().get_proxies() or {}
-            http_proxy = proxy.get("http")
-            https_proxy = proxy.get("https")
-            if http_proxy or https_proxy:
-                os.system(
-                    f"sudo git config --global http.proxy {http_proxy or https_proxy}")
-                os.system(
-                    f"sudo git config --global https.proxy {https_proxy or http_proxy}")
-            # 清理
-            os.system("sudo git clean -dffx")
-            # 升级
-            branch = os.getenv("NASTOOL_VERSION", "master")
-            os.system(f"sudo git fetch --depth 1 origin {branch}")
-            os.system(f"sudo git reset --hard origin/{branch}")
-            os.system("sudo git submodule update --init --recursive")
-            # 安装依赖（venv 内 pip）
-            os.system('sudo /opt/venv/bin/pip install -r /nas-tools/requirements.txt --no-build-isolation')
-            # 修复权限
-            os.system('sudo chown -R nt:nt /nas-tools')
-            # 重启
-            self.restart_server()
-        return {"code": 0}
+        # 不再区分群晖/Docker/普通环境
+        # 自动更新完全禁用，用户需手动更新或重新部署
+        log.warn("自动更新已禁用。请手动执行 git pull 或重新部署容器/套件。")
+        return {"code": 0, "msg": "自动更新已禁用"}
 
     @staticmethod
     def __reset_db_version():
@@ -1651,40 +1624,62 @@ class WebAction:
     @staticmethod
     def __test_connection(data):
         """
-        测试连通性
+        测试连通性（无 eval，白名单执行，阻断 SSRF）
         """
-        # 支持两种传入方式：命令数组或单个命令，单个命令时xx|xx模式解析为模块和类，进行动态引入
         command = data.get("command")
         ret = None
-        if command:
-            try:
-                module_obj = None
-                if isinstance(command, list):
-                    for cmd_str in command:
-                        ret = eval(cmd_str)
-                        if not ret:
-                            break
+        if not command:
+            return {"code": 0}
+
+        try:
+            # Media Server 固定映射白名单
+            MEDIA_SERVER_MAP = {
+                "app.mediaserver.client.emby|Emby": Emby,
+                "app.mediaserver.client.jellyfin|Jellyfin": Jellyfin,
+                "app.mediaserver.client.plex|Plex": Plex,
+            }
+            # 网络测试白名单（来自 ModuleConf.NETTEST_TARGETS）
+            NETTEST_WHITELIST = set(ModuleConf.NETTEST_TARGETS)
+
+            commands = command if isinstance(command, list) else [command]
+            for cmd in commands:
+                if "|" in cmd:
+                    # Media Server 状态测试
+                    if cmd not in MEDIA_SERVER_MAP:
+                        log.warn(f"test_connection: 拒绝未授权的 Media Server 类型: {cmd}")
+                        ret = False
+                        break
+                    cls = MEDIA_SERVER_MAP[cmd]
+                    instance = cls()
+                    if hasattr(instance, "init_config"):
+                        instance.init_config()
+                    ret = instance.get_status()
                 else:
-                    if command.find("|") != -1:
-                        module = command.split("|")[0]
-                        class_name = command.split("|")[1]
-                        module_obj = getattr(
-                            importlib.import_module(module), class_name)()
-                        if hasattr(module_obj, "init_config"):
-                            module_obj.init_config()
-                        ret = module_obj.get_status()
+                    # 网络连通性测试
+                    if cmd not in NETTEST_WHITELIST:
+                        log.warn(f"test_connection: 拒绝未授权的网络测试目标: {cmd}")
+                        ret = False
+                        break
+                    # 保留原 __net_test 的路径补全和代理选择逻辑
+                    target = cmd
+                    if target == "image.tmdb.org":
+                        target = target + "/t/p/w500/wwemzKWzjKYJFfCeiB57q3r4Bcm.png"
+                    if target == "qyapi.weixin.qq.com":
+                        target = target + "/cgi-bin/message/send"
+                    url = "https://" + target
+                    if "themoviedb" in url or "telegram" in url or "fanart" in url or "tmdb" in url:
+                        res = RequestUtils(proxies=Config().get_proxies(), timeout=5).get_res(url)
                     else:
-                        ret = eval(command)
-                # 重载配置
-                Config().init_config()
-                if module_obj:
-                    if hasattr(module_obj, "init_config"):
-                        module_obj.init_config()
-            except Exception as e:
-                ret = None
-                ExceptionUtils.exception_traceback(e)
-            return {"code": 0 if ret else 1}
-        return {"code": 0}
+                        res = RequestUtils(timeout=5).get_res(url)
+                    ret = res is not None and res.ok
+                if not ret:
+                    break
+
+            Config().init_config()
+        except Exception as e:
+            ret = None
+            ExceptionUtils.exception_traceback(e)
+        return {"code": 0 if ret else 1}
 
     @staticmethod
     def __user_manager(data):

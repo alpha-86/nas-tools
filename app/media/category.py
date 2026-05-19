@@ -35,7 +35,7 @@ class Category:
                 log.warn(f"【Config】二级分类策略 {category_name} 配置文件不存在，已按模板生成...")
             with open(self._category_path, mode='r', encoding='utf-8') as f:
                 try:
-                    yaml = ruamel.yaml.YAML()
+                    yaml = ruamel.yaml.YAML(typ='safe')
                     self._categorys = yaml.load(f)
                 except Exception as e:
                     ExceptionUtils.exception_traceback(e)

@@ -68,6 +68,18 @@ if not _secret_key:
     Config().save_config(_cfg)
 App.secret_key = _secret_key
 App.permanent_session_lifetime = datetime.timedelta(days=30)
+App.config['SESSION_COOKIE_HTTPONLY'] = True
+App.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# 仅在 HTTPS 环境下启用 Secure（Docker 内网部署可能为 HTTP）
+# 检测到配置了 ssl_cert/ssl_key 时自动启用；也可通过环境变量显式控制
+_ssl_cert = Config().get_config('app').get('ssl_cert')
+_ssl_key = Config().get_config('app').get('ssl_key')
+# cert 和 key 同时存在且有效时启用 Secure（与 run.py HTTPS 启动逻辑一致）
+# 反向代理 / Docker 内网场景可通过 NASTOOL_SESSION_SECURE 环境变量显式控制
+if (_ssl_cert and _ssl_key and
+        os.path.exists(_ssl_cert) and os.path.exists(_ssl_key)) or \
+        os.environ.get('NASTOOL_SESSION_SECURE', 'false').lower() == 'true':
+    App.config['SESSION_COOKIE_SECURE'] = True
 
 # Flask Socket
 Sock = Sock(App)
@@ -1297,6 +1309,20 @@ def telegram():
     interactive_client = Message().get_interactive_client(SearchType.TG)
     if not interactive_client:
         return 'NAStool未启用Telegram交互'
+    # 校验 Telegram 原生 secret_token（X-Telegram-Bot-Api-Secret-Token）
+    secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    api_key = Config().get_config("security").get("api_key")
+    if secret_token is None:
+        # 短期兼容：未携带 secret_token 时回退到 query apikey
+        secret_token = request.args.get("apikey")
+        if secret_token != api_key:
+            log.error("收到来自 %s 的非法Telegram消息：secret_token 不匹配" % request.remote_addr)
+            return '认证未通过'
+    elif secret_token != api_key:
+        # header 已携带但不匹配：直接拒绝，不再回退到 query（避免旧 webhook URL 泄漏导致绕过）
+        log.error("收到来自 %s 的非法Telegram消息：secret_token 不匹配" % request.remote_addr)
+        return '认证未通过'
+
     msg_json = request.get_json()
     if not SecurityHelper().check_telegram_ip(request.remote_addr):
         log.error("收到来自 %s 的非法Telegram消息：%s" % (request.remote_addr, msg_json))

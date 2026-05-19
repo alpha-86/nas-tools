@@ -1,5 +1,5 @@
 import os
-import pickle
+import json
 import random
 import time
 from enum import Enum
@@ -37,7 +37,7 @@ class MetaHelper(object):
         laboratory = Config().get_config('laboratory')
         if laboratory:
             self._tmdb_cache_expire = laboratory.get("tmdb_cache_expire")
-        self._meta_path = os.path.join(Config().get_config_path(), 'tmdb.dat')
+        self._meta_path = os.path.join(Config().get_config_path(), 'tmdb.json')
         self._meta_data = self.__load_meta_data(self._meta_path)
 
     def clear_meta_data(self):
@@ -140,8 +140,8 @@ class MetaHelper(object):
         """
         try:
             if os.path.exists(path):
-                with open(path, 'rb') as f:
-                    data = pickle.load(f)
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 return data
             return {}
         except Exception as e:
@@ -172,8 +172,8 @@ class MetaHelper(object):
                 and meta_data.keys() == new_meta_data.keys():
             return
 
-        with open(self._meta_path, 'wb') as f:
-            pickle.dump(new_meta_data, f, pickle.HIGHEST_PROTOCOL)
+        with open(self._meta_path, 'w', encoding='utf-8') as f:
+            json.dump(new_meta_data, f, ensure_ascii=False)
 
     def _random_sample(self, new_meta_data):
         """

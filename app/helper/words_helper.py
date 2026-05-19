@@ -1,9 +1,52 @@
+import ast
 import regex as re
 import cn2an
 
 from app.helper.db_helper import DbHelper
 from app.utils.commons import singleton
 from app.utils.exception_utils import ExceptionUtils
+
+
+_ALLOWED_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b if b != 0 else 0,
+    ast.FloorDiv: lambda a, b: a // b if b != 0 else 0,
+    ast.USub: lambda a: -a,
+}
+
+_SAFE_NUM_TYPES = (int, float)
+
+
+def safe_arith_eval(expr):
+    """
+    安全算术表达式求值。
+    仅允许：常量数字、+ - * //、一元负号。
+    拒绝：函数调用、属性访问、下标、名称引用、字符串等。
+    """
+    if not isinstance(expr, str):
+        raise ValueError("expr must be string")
+    tree = ast.parse(expr, mode='eval')
+    return _eval_node(tree.body)
+
+
+def _eval_node(node):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, _SAFE_NUM_TYPES):
+            return node.value
+        raise ValueError(f"Disallowed constant type: {type(node.value)}")
+    if isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed binary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.left), _eval_node(node.right))
+    if isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _ALLOWED_OPS:
+            raise ValueError(f"Disallowed unary operator: {op_type.__name__}")
+        return _ALLOWED_OPS[op_type](_eval_node(node.operand))
+    raise ValueError(f"Disallowed AST node: {type(node).__name__}")
 
 
 @singleton
@@ -128,7 +171,7 @@ class WordsHelper:
             for episode_num_str in episode_nums_str:
                 episode_num_int = int(cn2an.cn2an(episode_num_str, "smart"))
                 offset_caculate = offset.replace("EP", str(episode_num_int))
-                episode_num_offset_int = int(eval(offset_caculate))
+                episode_num_offset_int = int(safe_arith_eval(offset_caculate))
                 # 向前偏移
                 if episode_num_int > episode_num_offset_int:
                     offset_order_flag = True

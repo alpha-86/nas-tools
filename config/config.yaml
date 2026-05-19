@@ -25,8 +25,8 @@ app:
   web_port: 3000
   # 【WEB管理页面登录用户】，默认admin
   login_user: admin
-  # 【WEB管理页面登录密码】：默认password，如果是全数字密码，要用''括起来
-  login_password: 'password'
+  # 【WEB管理页面登录密码】：留空时首次启动自动生成随机密码并打印到日志，如果是全数字密码，要用''括起来
+  login_password:
   # 【WEB管理界面使用的HTTPS的证书和KEY的路径】，留空则不启用HTTPS
   ssl_cert:
   ssl_key:

@@ -4,11 +4,11 @@ import time
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 import log
 from app.conf import SystemConfig
-from app.helper import DbHelper, PluginHelper
+from app.helper import DbHelper
 from app.plugins import PluginManager
 from app.media import Category
 from app.utils import ConfigLoadCache, CategoryLoadCache, ExceptionUtils, StringUtils
@@ -51,7 +51,7 @@ def check_config():
         login_user = Config().get_config('app').get('login_user')
         login_password = Config().get_config('app').get('login_password')
         if not login_user or not login_password:
-            log.warn("【Config】WEB管理用户或密码未设置，将使用默认用户：admin，密码：password")
+            log.warn("【Config】WEB管理用户未设置，将使用默认用户：admin。密码未设置，已自动生成随机密码，请查看日志或 config.yaml 获取。强烈建议立即修改。")
         else:
             log.info(f"WEB管理页面用户：{str(login_user)}")
 
@@ -78,8 +78,24 @@ def update_config():
     _dbhelper = DbHelper()
     overwrite_cofig = False
 
-    # 密码初始化
-    login_password = _config.get("app", {}).get("login_password") or "password"
+    # 密码初始化（空值、明文弱口令 'password'、或已 hash 的默认弱口令均重置）
+    login_password = _config.get("app", {}).get("login_password")
+    # YAML 可能解析为 int/bool，统一转字符串避免 AttributeError
+    if login_password is not None:
+        login_password = str(login_password)
+    need_reset = False
+    if not login_password or login_password.strip() == "password":
+        need_reset = True
+    elif login_password.startswith("[hash]"):
+        stored_hash = login_password[6:]
+        if check_password_hash(stored_hash, "password"):
+            need_reset = True
+            log.warn("【安全】检测到默认弱口令 'password' 的 hash，正在强制重置...")
+    if need_reset:
+        login_password = StringUtils.generate_random_str(32)
+        _config['app']['login_password'] = login_password
+        overwrite_cofig = True
+        log.warn("【安全】首次启动已生成随机管理员密码：%s，请使用此密码登录后尽快修改。" % login_password)
     if login_password and not login_password.startswith("[hash]"):
         _config['app']['login_password'] = "[hash]%s" % generate_password_hash(
             login_password)
@@ -308,27 +324,6 @@ def update_config():
                 "queue_cnt": 10
             })
             _config['pt'].pop("ptsignin_cron")
-            overwrite_cofig = True
-    except Exception as e:
-        ExceptionUtils.exception_traceback(e)
-
-    # 存量插件安装情况统计
-    try:
-        plugin_report_state = SystemConfig().get(SystemConfigKey.UserInstalledPluginsReport)
-        installed_plugins = SystemConfig().get(SystemConfigKey.UserInstalledPlugins)
-        if not plugin_report_state and installed_plugins:
-            ret = PluginHelper().report(installed_plugins)
-            if ret:
-                SystemConfig().set(SystemConfigKey.UserInstalledPluginsReport, '1')
-    except Exception as e:
-        ExceptionUtils.exception_traceback(e)
-
-    # TMDB代理服务开关迁移
-    try:
-        tmdb_proxy = Config().get_config('laboratory').get("tmdb_proxy")
-        if tmdb_proxy:
-            _config['app']['tmdb_domain'] = 'tmdb.nastool.org'
-            _config['laboratory'].pop("tmdb_proxy")
             overwrite_cofig = True
     except Exception as e:
         ExceptionUtils.exception_traceback(e)

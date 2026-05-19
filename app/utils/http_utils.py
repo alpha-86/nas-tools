@@ -21,7 +21,8 @@ class RequestUtils:
                  timeout=None,
                  referer=None,
                  content_type=None,
-                 accept_type=None):
+                 accept_type=None,
+                 verify=True):
         if not content_type:
             content_type = "application/x-www-form-urlencoded; charset=UTF-8"
         if headers:
@@ -54,6 +55,7 @@ class RequestUtils:
             self._session = session
         if timeout:
             self._timeout = timeout
+        self._verify = verify
 
     def post(self, url, data=None, json=None):
         if json is None:
@@ -62,7 +64,7 @@ class RequestUtils:
             if self._session:
                 return self._session.post(url,
                                           data=data,
-                                          verify=False,
+                                          verify=self._verify,
                                           headers=self._headers,
                                           proxies=self._proxies,
                                           timeout=self._timeout,
@@ -70,7 +72,7 @@ class RequestUtils:
             else:
                 return requests.post(url,
                                      data=data,
-                                     verify=False,
+                                     verify=self._verify,
                                      headers=self._headers,
                                      proxies=self._proxies,
                                      timeout=self._timeout,
@@ -82,14 +84,14 @@ class RequestUtils:
         try:
             if self._session:
                 r = self._session.get(url,
-                                      verify=False,
+                                      verify=self._verify,
                                       headers=self._headers,
                                       proxies=self._proxies,
                                       timeout=self._timeout,
                                       params=params)
             else:
                 r = requests.get(url,
-                                 verify=False,
+                                 verify=self._verify,
                                  headers=self._headers,
                                  proxies=self._proxies,
                                  timeout=self._timeout,
@@ -103,7 +105,7 @@ class RequestUtils:
             if self._session:
                 return self._session.get(url,
                                          params=params,
-                                         verify=False,
+                                         verify=self._verify,
                                          headers=self._headers,
                                          proxies=self._proxies,
                                          cookies=self._cookies,
@@ -112,7 +114,7 @@ class RequestUtils:
             else:
                 return requests.get(url,
                                     params=params,
-                                    verify=False,
+                                    verify=self._verify,
                                     headers=self._headers,
                                     proxies=self._proxies,
                                     cookies=self._cookies,
@@ -129,7 +131,7 @@ class RequestUtils:
                 return self._session.post(url,
                                           data=data,
                                           params=params,
-                                          verify=False,
+                                          verify=self._verify,
                                           headers=self._headers,
                                           proxies=self._proxies,
                                           cookies=self._cookies,
@@ -141,7 +143,7 @@ class RequestUtils:
                 return requests.post(url,
                                      data=data,
                                      params=params,
-                                     verify=False,
+                                     verify=self._verify,
                                      headers=self._headers,
                                      proxies=self._proxies,
                                      cookies=self._cookies,

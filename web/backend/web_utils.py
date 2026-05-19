@@ -51,20 +51,8 @@ class WebUtils:
     def get_latest_version():
         """
         获取最新版本号
+        远程版本检查服务 nastool.org 已不可用，禁用版本检查。
         """
-        try:
-            releases_update_only = Config().get_config("app").get("releases_update_only")
-            version_res = RequestUtils(proxies=Config().get_proxies()).get_res(
-                f"https://nastool.org/{quote(WebUtils.get_current_version())}/update")
-            if version_res:
-                ver_json = version_res.json()
-                version = ver_json.get("latest")
-                link = ver_json.get("link")
-                if version and releases_update_only:
-                    version = version.split()[0]
-                return version, link
-        except Exception as e:
-            ExceptionUtils.exception_traceback(e)
         return None, None
 
     @staticmethod

@@ -51,7 +51,7 @@ class Telegram(_IMessageClient):
             if self._telegram_token and self._telegram_chat_id:
                 if self._webhook:
                     if self._domain:
-                        self._webhook_url = "%s/telegram?apikey=%s" % (self._domain, self._api_key)
+                        self._webhook_url = "%s/telegram" % self._domain
                         self.__set_bot_webhook()
                     if self._message_proxy_event:
                         self._message_proxy_event.set()
@@ -225,7 +225,7 @@ class Telegram(_IMessageClient):
         if status and status != 1:
             if status == 2:
                 self.__del_bot_webhook()
-            values = {"url": self._webhook_url, "allowed_updates": ["message"]}
+            values = {"url": self._webhook_url, "allowed_updates": ["message"], "secret_token": self._api_key}
             sc_url = "https://api.telegram.org/bot%s/setWebhook?" % self._telegram_token
             res = RequestUtils(proxies=Config().get_proxies()).get_res(sc_url + urlencode(values))
             if res is not None:
@@ -290,7 +290,7 @@ class Telegram(_IMessageClient):
                         # 无论本地是否成功，先更新offset，即消息最多成功消费一次
                         _offset = msg["update_id"] + 1
                         log.debug("【Telegram】接收到消息: %s" % msg)
-                        local_res = requests.post(_ds_url, json=msg, timeout=10)
+                        local_res = requests.post(_ds_url, json=msg, headers={"X-Telegram-Bot-Api-Secret-Token": self._api_key}, timeout=10)
                         log.debug("【Telegram】message: %s processed, response is: %s" % (msg, local_res.text))
             except Exception as e:
                 ExceptionUtils.exception_traceback(e)
@@ -302,7 +302,7 @@ class Telegram(_IMessageClient):
             _config = Config()
             web_port = _config.get_config("app").get("web_port")
             sc_url = "https://api.telegram.org/bot%s/getUpdates?" % self._telegram_token
-            ds_url = "http://127.0.0.1:%s/telegram?apikey=%s" % (web_port, self._api_key)
+            ds_url = "http://127.0.0.1:%s/telegram" % web_port
             if not self._enabled:
                 log.info("Telegram消息接收服务已停止")
                 break

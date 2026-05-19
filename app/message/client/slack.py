@@ -34,7 +34,8 @@ class Slack(_IMessageClient):
     def init_config(self):
         _web_port = self._config.get_config("app").get("web_port")
         _api_key = self._config.get_config("security").get("api_key")
-        self._ds_url = "http://127.0.0.1:%s/slack?apikey=%s" % (_web_port, _api_key)
+        self._ds_url = "http://127.0.0.1:%s/slack" % _web_port
+        self._api_key = _api_key
         if self._client_config:
             try:
                 slack_app = App(token=self._client_config.get("bot_token"))
@@ -46,7 +47,7 @@ class Slack(_IMessageClient):
             # 注册消息响应
             @slack_app.event("message")
             def slack_message(message):
-                local_res = requests.post(self._ds_url, json=message, timeout=10)
+                local_res = requests.post(self._ds_url, json=message, headers={"X-API-Key": self._api_key}, timeout=10)
                 log.debug("【Slack】message: %s processed, response is: %s" % (message, local_res.text))
 
             @slack_app.action(re.compile(r"actionId-\d+"))
