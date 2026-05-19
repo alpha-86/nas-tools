@@ -311,56 +311,25 @@ class Kodi(_IMediaClient):
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
+        查询 path.strContent 为 movies/tvshows 的 Kodi 库源路径
         """
         conn = self._get_connection()
         if not conn:
             return []
         try:
             with conn.cursor() as cursor:
-                # 查询所有含电影的路径
                 cursor.execute(
-                    "SELECT DISTINCT p.idPath, p.strPath, 'movie' AS media_type "
-                    "FROM path p JOIN files f ON p.idPath = f.idPath "
-                    "JOIN movie m ON f.idFile = m.idFile"
+                    "SELECT idPath, strPath, strContent FROM path "
+                    "WHERE strContent IN ('movies', 'tvshows')"
                 )
-                movie_paths = cursor.fetchall()
-
-                # 查询所有含剧集的路径
-                cursor.execute(
-                    "SELECT DISTINCT p.idPath, p.strPath, 'tv' AS media_type "
-                    "FROM path p JOIN tvshowlinkpath tlp ON p.idPath = tlp.idPath"
-                )
-                tv_paths = cursor.fetchall()
-
-                # 合并路径
-                path_map = {}
-                for row in movie_paths:
-                    pid = row['idPath']
-                    if pid not in path_map:
-                        path_map[pid] = {
-                            'id': pid,
-                            'path': row['strPath'],
-                            'type': 'movie'
-                        }
-                for row in tv_paths:
-                    pid = row['idPath']
-                    if pid in path_map:
-                        if path_map[pid]['type'] == 'movie':
-                            path_map[pid]['type'] = 'mixed'
-                    else:
-                        path_map[pid] = {
-                            'id': pid,
-                            'path': row['strPath'],
-                            'type': 'tv'
-                        }
-
+                rows = cursor.fetchall()
                 libraries = []
-                for pid, info in path_map.items():
-                    path_str = info['path']
+                for row in rows:
+                    path_str = row['strPath']
                     name = os.path.basename(path_str.rstrip('/\\')) or path_str
-                    library_type = MediaType.MOVIE.value if info['type'] == 'movie' else MediaType.TV.value
+                    library_type = MediaType.MOVIE.value if row['strContent'] == 'movies' else MediaType.TV.value
                     libraries.append({
-                        'id': pid,
+                        'id': row['idPath'],
                         'name': name,
                         'path': path_str,
                         'type': library_type,
@@ -378,7 +347,7 @@ class Kodi(_IMediaClient):
     def get_items(self, parent):
         """
         获取媒体库中的所有媒体
-        :param parent: path.idPath
+        :param parent: Kodi 库源的 path.idPath，通过路径前缀匹配所有子目录下的媒体
         """
         if not parent:
             yield {}
@@ -387,7 +356,15 @@ class Kodi(_IMediaClient):
             yield {}
         try:
             with conn.cursor() as cursor:
-                # 查询电影（一次性 LEFT JOIN uniqueid 获取 tmdb/imdb）
+                # 查询库源路径字符串
+                cursor.execute("SELECT strPath FROM path WHERE idPath = %s", (parent,))
+                row = cursor.fetchone()
+                if not row or not row.get('strPath'):
+                    yield {}
+                source_path = row['strPath']
+                prefix = source_path if source_path.endswith('/') else source_path + '/'
+
+                # 查询该库下所有电影（路径前缀匹配 + LEFT JOIN uniqueid）
                 cursor.execute(
                     "SELECT m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title, "
                     "p.strPath, f.strFilename, "
@@ -396,9 +373,9 @@ class Kodi(_IMediaClient):
                     "FROM movie m JOIN files f ON m.idFile = f.idFile "
                     "JOIN path p ON f.idPath = p.idPath "
                     "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' "
-                    "WHERE f.idPath = %s "
+                    "WHERE p.strPath LIKE %s "
                     "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename",
-                    (parent,)
+                    (prefix + '%',)
                 )
                 movies = cursor.fetchall()
                 for movie in movies:
@@ -419,16 +396,17 @@ class Kodi(_IMediaClient):
                         'json': str({})
                     }
 
-                # 查询剧集（一次性 LEFT JOIN uniqueid 获取 tmdb/imdb）
+                # 查询该库下所有剧集（路径前缀匹配 + LEFT JOIN uniqueid）
                 cursor.execute(
                     "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title, "
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
                     "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
                     "FROM tvshow t JOIN tvshowlinkpath tlp ON t.idShow = tlp.idShow "
+                    "JOIN path p ON tlp.idPath = p.idPath "
                     "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' "
-                    "WHERE tlp.idPath = %s "
+                    "WHERE p.strPath LIKE %s "
                     "GROUP BY t.idShow, t.c00, t.c05, t.c09",
-                    (parent,)
+                    (prefix + '%',)
                 )
                 tvshows = cursor.fetchall()
                 for tvshow in tvshows:

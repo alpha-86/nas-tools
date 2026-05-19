@@ -240,10 +240,9 @@ class TestKodiClient:
     @patch('app.mediaserver.client.kodi.pymysql.connect')
     def test_get_libraries(self, mock_connect):
         mock_conn = MockConnection([
-            # First query: movie paths
-            [{'idPath': 1, 'strPath': '/movies', 'media_type': 'movie'}],
-            # Second query: tv paths
-            [{'idPath': 2, 'strPath': '/tvshows', 'media_type': 'tv'}]
+            # 查询 strContent IN ('movies', 'tvshows') 的 Kodi 库源路径
+            [{'idPath': 1, 'strPath': '/movies/', 'strContent': 'movies'},
+             {'idPath': 2, 'strPath': '/tvshows/', 'strContent': 'tvshows'}]
         ])
         mock_connect.return_value = mock_conn
         kodi = make_kodi({
@@ -257,6 +256,11 @@ class TestKodiClient:
         assert len(result) == 2
         names = {lib['name'] for lib in result}
         assert names == {'movies', 'tvshows'}
+        # 验证类型映射（MediaType.MOVIE.value / TV.value）
+        from app.utils.types import MediaType
+        types = {lib['name']: lib['type'] for lib in result}
+        assert types['movies'] == MediaType.MOVIE.value
+        assert types['tvshows'] == MediaType.TV.value
 
     @patch('app.mediaserver.client.kodi.pymysql.connect')
     def test_get_items_movies(self, mock_connect):
@@ -268,9 +272,11 @@ class TestKodiClient:
             'mysql_db': 'MyVideos119'
         })
         mock_conn = MockConnection([
+            # source path query
+            [{'strPath': '/movies/'}],
             # movie query with LEFT JOIN uniqueid
             [{'idMovie': 1, 'title': 'Test Movie', 'premiered': '2023-01-01',
-              'original_title': 'Original', 'strPath': '/movies', 'strFilename': 'test.mkv',
+              'original_title': 'Original', 'strPath': '/movies/sub', 'strFilename': 'test.mkv',
               'tmdbid': '999', 'imdbid': 'tt123'}],
             # tvshow query (empty)
             []
@@ -294,6 +300,8 @@ class TestKodiClient:
             'mysql_db': 'MyVideos119'
         })
         mock_conn = MockConnection([
+            # source path query
+            [{'strPath': '/tvshows/'}],
             # movie query (empty)
             [],
             # tvshow query with LEFT JOIN uniqueid
@@ -320,16 +328,18 @@ class TestKodiClient:
             'mysql_db': 'MyVideos119'
         })
         mock_conn = MockConnection([
+            # source path query
+            [{'strPath': '/lib/'}],
             # movie query returns 3 movies
             [
                 {'idMovie': 1, 'title': 'M1', 'premiered': '2020-01-01',
-                 'original_title': 'O1', 'strPath': '/m', 'strFilename': '1.mkv',
+                 'original_title': 'O1', 'strPath': '/lib/m', 'strFilename': '1.mkv',
                  'tmdbid': '1', 'imdbid': 'tt1'},
                 {'idMovie': 2, 'title': 'M2', 'premiered': '2021-01-01',
-                 'original_title': 'O2', 'strPath': '/m', 'strFilename': '2.mkv',
+                 'original_title': 'O2', 'strPath': '/lib/m', 'strFilename': '2.mkv',
                  'tmdbid': '2', 'imdbid': 'tt2'},
                 {'idMovie': 3, 'title': 'M3', 'premiered': '2022-01-01',
-                 'original_title': 'O3', 'strPath': '/m', 'strFilename': '3.mkv',
+                 'original_title': 'O3', 'strPath': '/lib/m', 'strFilename': '3.mkv',
                  'tmdbid': '3', 'imdbid': 'tt3'},
             ],
             # tvshow query returns 2 shows
@@ -490,16 +500,18 @@ class TestKodiClient:
         })
         # 模拟 GROUP BY 聚合后的结果：每个媒体只有一行，tmdbid/imdbid 从多行 uniqueid 聚合而来
         mock_conn = MockConnection([
+            # source path query
+            [{'strPath': '/lib/'}],
             # movie query：3部电影，每部都有 tmdb + imdb 两条 uniqueid 行，但 GROUP BY 后各一行
             [
                 {'idMovie': 1, 'title': 'Movie A', 'premiered': '2020-01-01',
-                 'original_title': 'OrigA', 'strPath': '/m', 'strFilename': 'a.mkv',
+                 'original_title': 'OrigA', 'strPath': '/lib/m', 'strFilename': 'a.mkv',
                  'tmdbid': '100', 'imdbid': 'tt100'},
                 {'idMovie': 2, 'title': 'Movie B', 'premiered': '2021-01-01',
-                 'original_title': 'OrigB', 'strPath': '/m', 'strFilename': 'b.mkv',
+                 'original_title': 'OrigB', 'strPath': '/lib/m', 'strFilename': 'b.mkv',
                  'tmdbid': '200', 'imdbid': 'tt200'},
                 {'idMovie': 3, 'title': 'Movie C', 'premiered': '2022-01-01',
-                 'original_title': 'OrigC', 'strPath': '/m', 'strFilename': 'c.mkv',
+                 'original_title': 'OrigC', 'strPath': '/lib/m', 'strFilename': 'c.mkv',
                  'tmdbid': '300', 'imdbid': 'tt300'},
             ],
             # tvshow query：2部剧，各有 tmdb + imdb uniqueid 行，GROUP BY 后各一行
@@ -544,7 +556,14 @@ class TestKodiClient:
                 self.last_cursor = MockCursor(self._query_results)
                 return self.last_cursor
 
-        mock_conn = TrackingConnection([[], []])
+        mock_conn = TrackingConnection([
+            # source path query
+            [{'strPath': '/lib/'}],
+            # movie query
+            [],
+            # tvshow query
+            []
+        ])
         mock_connect.return_value = mock_conn
         kodi = make_kodi({
             'mysql_host': '127.0.0.1',
@@ -556,10 +575,10 @@ class TestKodiClient:
         list(kodi.get_items(parent=1))
 
         cursor = mock_conn.last_cursor
-        # 应该有 2 条 SQL（movie query + tvshow query）
-        assert len(cursor.executed) == 2
-        movie_sql = cursor.executed[0][0]
-        tvshow_sql = cursor.executed[1][0]
+        # 应该有 3 条 SQL（source path + movie query + tvshow query）
+        assert len(cursor.executed) == 3
+        movie_sql = cursor.executed[1][0]
+        tvshow_sql = cursor.executed[2][0]
 
         # Movie: 非聚合列为 m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename
         movie_group_by = "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename"
