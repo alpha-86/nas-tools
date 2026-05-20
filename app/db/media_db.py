@@ -5,7 +5,7 @@ import time
 
 import requests
 from cachetools import cached, TTLCache
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 
@@ -38,6 +38,13 @@ class MediaDb:
     def init_db():
         with lock:
             BaseMedia.metadata.create_all(_Engine)
+            # 增量迁移：为已有表添加新列
+            try:
+                with _Engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE MEDIASYNC_ITEMS ADD COLUMN POSTER TEXT"))
+                    conn.commit()
+            except Exception:
+                pass  # 列已存在则忽略
 
     @staticmethod
     def _download_poster(poster_url, item_id):
