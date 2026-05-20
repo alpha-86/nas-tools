@@ -377,7 +377,6 @@ class Kodi(_IMediaClient):
         获取媒体服务器所有媒体库列表
         Kodi 按视频类型分为电影和剧集两个库
         """
-        domain = Config().get_domain() or ''
         return [
             {
                 'id': 'movies',
@@ -385,7 +384,8 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.MOVIE.value,
                 'image': '',
-                'link': f"{domain}/library_browse?library=movies&name=电影"
+                'link': '',
+                'navpage': 'library_browse?library=movies&name=电影'
             },
             {
                 'id': 'tvshows',
@@ -393,7 +393,8 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.TV.value,
                 'image': '',
-                'link': f"{domain}/library_browse?library=tvshows&name=剧集"
+                'link': '',
+                'navpage': 'library_browse?library=tvshows&name=剧集'
             }
         ]
 
