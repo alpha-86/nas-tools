@@ -75,6 +75,7 @@ class MediaDb:
             return False
         try:
             # 处理海报：TMDB 相对路径需转为完整 URL 并下载到本地
+            # 跳过 NFS/SMB 等本地网络路径（Kodi art 表存储的）
             raw_poster = iteminfo.get("poster") or ''
             if raw_poster.startswith('/'):
                 full_url = Config().get_tmdbimage_url(raw_poster)
@@ -82,7 +83,8 @@ class MediaDb:
             elif raw_poster.startswith('http'):
                 poster_path = self._download_poster(raw_poster, iteminfo.get("id"))
             else:
-                poster_path = raw_poster or None
+                # NFS/SMB 等路径不存储，留给 sync_posters 从 TMDB 获取
+                poster_path = None
             # NOTE 字段存储原始 TMDB 海报路径，用于显示时回退下载
             raw_poster_path = raw_poster if raw_poster.startswith('/') else None
 

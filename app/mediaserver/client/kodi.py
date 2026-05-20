@@ -926,11 +926,16 @@ class Kodi(_IMediaClient):
         from app.db.models import MEDIASYNCITEMS
         db = MediaDb()
         try:
+            # 查找需要从 TMDB 获取海报的记录：无海报或海报为 NFS 等本地路径
             missing = db.session.query(MEDIASYNCITEMS).filter(
                 MEDIASYNCITEMS.SERVER == self.client_id,
                 MEDIASYNCITEMS.TMDBID.isnot(None),
                 MEDIASYNCITEMS.TMDBID != '',
-                (MEDIASYNCITEMS.POSTER.is_(None)) | (MEDIASYNCITEMS.POSTER == '')
+                (MEDIASYNCITEMS.POSTER.is_(None))
+                | (MEDIASYNCITEMS.POSTER == '')
+                | (MEDIASYNCITEMS.POSTER.like('nfs://%'))
+                | (MEDIASYNCITEMS.POSTER.like('smb://%'))
+                | (MEDIASYNCITEMS.POSTER.like('/%'))
             ).all()
         except Exception:
             missing = []
