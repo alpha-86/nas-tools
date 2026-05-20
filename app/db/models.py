@@ -577,6 +577,7 @@ class MEDIASYNCITEMS(BaseMedia):
     YEAR = Column(Text)
     TMDBID = Column(Text, index=True)
     IMDBID = Column(Text)
+    POSTER = Column(Text)
     PATH = Column(Text)
     NOTE = Column(Text)
     JSON = Column(Text)

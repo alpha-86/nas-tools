@@ -415,10 +415,12 @@ class Kodi(_IMediaClient):
                         "SELECT m.idMovie, m.c00 AS title, m.premiered, m.c16 AS original_title, "
                         "p.strPath, f.strFilename, "
                         "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
-                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
+                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid, "
+                        "MAX(CASE WHEN a.type = 'poster' THEN a.url END) AS poster "
                         "FROM movie m JOIN files f ON m.idFile = f.idFile "
                         "JOIN path p ON f.idPath = p.idPath "
                         "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' "
+                        "LEFT JOIN art a ON a.media_id = m.idMovie AND a.media_type = 'movie' "
                         "GROUP BY m.idMovie, m.c00, m.premiered, m.c16, p.strPath, f.strFilename"
                     )
                     for movie in cursor.fetchall():
@@ -435,6 +437,7 @@ class Kodi(_IMediaClient):
                             'year': year,
                             'tmdbid': movie.get('tmdbid'),
                             'imdbid': movie.get('imdbid'),
+                            'poster': movie.get('poster'),
                             'path': full_path,
                             'json': str({})
                         }
@@ -442,9 +445,11 @@ class Kodi(_IMediaClient):
                     cursor.execute(
                         "SELECT t.idShow, t.c00 AS title, t.c05 AS premiered, t.c09 AS original_title, "
                         "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid, "
-                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid "
+                        "MAX(CASE WHEN u.type = 'imdb' THEN u.value END) AS imdbid, "
+                        "MAX(CASE WHEN a.type = 'poster' THEN a.url END) AS poster "
                         "FROM tvshow t "
                         "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' "
+                        "LEFT JOIN art a ON a.media_id = t.idShow AND a.media_type = 'tvshow' "
                         "GROUP BY t.idShow, t.c00, t.c05, t.c09"
                     )
                     for tvshow in cursor.fetchall():
@@ -458,6 +463,7 @@ class Kodi(_IMediaClient):
                             'year': year,
                             'tmdbid': tvshow.get('tmdbid'),
                             'imdbid': tvshow.get('imdbid'),
+                            'poster': tvshow.get('poster'),
                             'path': '',
                             'json': str({})
                         }

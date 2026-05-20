@@ -974,6 +974,14 @@ def library_browse():
                            LibraryName=library_name)
 
 
+# 本地海报缓存（同步时从 TMDB 下载）
+@App.route('/posters/<path:filename>')
+@login_required
+def poster_file(filename):
+    poster_dir = os.path.join(Config().get_config_path(), 'posters')
+    return send_from_directory(poster_dir, filename)
+
+
 # 媒体服务器页面
 @App.route('/mediaserver', methods=['POST', 'GET'])
 @login_required

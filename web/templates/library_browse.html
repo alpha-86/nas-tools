@@ -47,8 +47,8 @@
           card.href = detailUrl;
 
           let imageHtml = '';
-          if (item.tmdbid) {
-            imageHtml = '<custom-img img-class="w-100" img-src="img?url=https://image.tmdb.org/t/p/w500' + item.tmdbid + '.jpg" img-ratio="150%" img-style="object-fit: cover;"></custom-img>';
+          if (item.poster) {
+            imageHtml = '<custom-img img-class="w-100" img-src="' + item.poster + '" img-ratio="150%" img-style="object-fit: cover;"></custom-img>';
           } else {
             imageHtml = '<div class="bg-secondary text-white d-flex align-items-center justify-content-center" style="aspect-ratio: 2/3;"><span class="h4">' + (item.title || '未知') + '</span></div>';
           }

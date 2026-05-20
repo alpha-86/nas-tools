@@ -3,6 +3,7 @@ import os
 import threading
 import time
 
+import requests
 from cachetools import cached, TTLCache
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
@@ -38,10 +39,44 @@ class MediaDb:
         with lock:
             BaseMedia.metadata.create_all(_Engine)
 
+    @staticmethod
+    def _download_poster(poster_url, item_id):
+        """
+        从 TMDB 下载海报到本地缓存目录，返回相对路径（如 /posters/movie_123.jpg）
+        若文件已存在则跳过下载
+        """
+        if not poster_url or not item_id:
+            return None
+        try:
+            poster_dir = os.path.join(Config().get_config_path(), 'posters')
+            os.makedirs(poster_dir, exist_ok=True)
+            filename = item_id.replace(':', '_') + '.jpg'
+            local_path = os.path.join(poster_dir, filename)
+            if not os.path.exists(local_path):
+                resp = requests.get(poster_url, timeout=10, headers={'User-Agent': 'NAStools/1.0'})
+                if resp.status_code == 200:
+                    with open(local_path, 'wb') as f:
+                        f.write(resp.content)
+                else:
+                    return None
+            return f'/posters/{filename}'
+        except Exception:
+            return None
+
     def insert(self, server_type, iteminfo, seasoninfo):
         if not server_type or not iteminfo:
             return False
         try:
+            # 处理海报：TMDB 相对路径需转为完整 URL 并下载到本地
+            raw_poster = iteminfo.get("poster") or ''
+            if raw_poster.startswith('/'):
+                full_url = Config().get_tmdbimage_url(raw_poster)
+                poster_path = self._download_poster(full_url, iteminfo.get("id"))
+            elif raw_poster.startswith('http'):
+                poster_path = self._download_poster(raw_poster, iteminfo.get("id"))
+            else:
+                poster_path = raw_poster or None
+
             self.session.query(MEDIASYNCITEMS).filter(MEDIASYNCITEMS.SERVER == server_type,
                                                       MEDIASYNCITEMS.ITEM_ID == iteminfo.get("id")).delete()
             self.session.flush()
@@ -55,6 +90,7 @@ class MediaDb:
                 YEAR=iteminfo.get("year"),
                 TMDBID=iteminfo.get("tmdbid"),
                 IMDBID=iteminfo.get("imdbid"),
+                POSTER=poster_path,
                 PATH=iteminfo.get("path"),
                 JSON=json.dumps(seasoninfo)
             ))

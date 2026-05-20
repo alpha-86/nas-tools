@@ -2635,6 +2635,7 @@ class WebAction:
                 "year": item.YEAR,
                 "tmdbid": item.TMDBID,
                 "imdbid": item.IMDBID,
+                "poster": item.POSTER or '',
                 "type": item.ITEM_TYPE,
                 "path": item.PATH
             })
