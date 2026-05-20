@@ -1,6 +1,7 @@
 import os
 
 import pymysql
+from cachetools import TTLCache, cached
 
 import log
 from app.mediaserver.client._base import _IMediaClient
@@ -25,6 +26,13 @@ class Kodi(_IMediaClient):
     _dbuser = None
     _dbpassword = None
     _dbname = None
+
+    # 类级别缓存（TTL 60s）用于首页实时数据，避免每次刷新都查 MySQL
+    _cache = TTLCache(maxsize=16, ttl=60)
+
+    @staticmethod
+    def _cache_key(method, *args, **kwargs):
+        return f"{method}:{args}:{sorted(kwargs.items())}"
 
     def __init__(self, config=None):
         if config:
@@ -103,6 +111,9 @@ class Kodi(_IMediaClient):
         获取活动记录
         从 files.lastPlayed 获取最近播放记录
         """
+        cache_key = f"activity:{num}"
+        if cache_key in Kodi._cache:
+            return list(Kodi._cache[cache_key])
         conn = self._get_connection()
         if not conn:
             return []
@@ -144,7 +155,9 @@ class Kodi(_IMediaClient):
                     })
                 # 按时间倒序
                 ret_array.sort(key=lambda x: x['date'], reverse=True)
-                return ret_array[:num]
+                result = ret_array[:num]
+                Kodi._cache[cache_key] = result
+                return result
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取活动记录失败：{str(e)}")
@@ -628,6 +641,9 @@ class Kodi(_IMediaClient):
         获得继续观看
         从 bookmark 表获取播放进度
         """
+        cache_key = f"resume:{num}"
+        if cache_key in Kodi._cache:
+            return list(Kodi._cache[cache_key])
         conn = self._get_connection()
         if not conn:
             return []
@@ -683,7 +699,9 @@ class Kodi(_IMediaClient):
                         "link": self.get_play_url(item_id),
                         "percent": percent
                     })
-                return ret_resume[:num]
+                result = ret_resume[:num]
+                Kodi._cache[cache_key] = result
+                return result
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取继续观看失败：{str(e)}")
@@ -696,6 +714,9 @@ class Kodi(_IMediaClient):
         获得最近更新
         从 files.dateAdded 获取最近添加的媒体
         """
+        cache_key = f"latest:{num}"
+        if cache_key in Kodi._cache:
+            return list(Kodi._cache[cache_key])
         conn = self._get_connection()
         if not conn:
             return []
@@ -744,7 +765,9 @@ class Kodi(_IMediaClient):
                         "link": self.get_play_url(item_id)
                     })
                 # 合并后按 dateAdded 倒序（简化处理：电影和剧集分别查询后截取）
-                return ret_latest[:num]
+                result = ret_latest[:num]
+                Kodi._cache[cache_key] = result
+                return result
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取最近添加失败：{str(e)}")

@@ -70,8 +70,6 @@
     });
   }
 
-  // 页面加载完成后执行
-  $(document).ready(function () {
-    load_library_items();
-  });
+  // 直接执行（AJAX 加载后 script 会立即运行）
+  load_library_items();
 </script>

@@ -131,6 +131,7 @@ class WebAction:
             "restory_backup": self.__restory_backup,
             "start_mediasync": self.__start_mediasync,
             "mediasync_state": self.__mediasync_state,
+            "get_library_items": self.__get_library_items,
             "get_tvseason_list": self.__get_tvseason_list,
             "get_userrss_task": self.__get_userrss_task,
             "delete_userrss_task": self.__delete_userrss_task,
