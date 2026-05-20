@@ -919,14 +919,14 @@ class Kodi(_IMediaClient):
 
     def sync_posters(self):
         """
-        从 TMDB 获取海报路径并下载到本地缓存
+        从 TMDB 获取海报路径并下载到本地缓存（并行）
         遍历 MEDIASYNCITEMS 中有 TMDBID 但缺少本地海报的记录
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from app.db import MediaDb
         from app.db.models import MEDIASYNCITEMS
         db = MediaDb()
         try:
-            # 查找需要从 TMDB 获取海报的记录：无海报或海报为 NFS 等本地路径
             missing = db.session.query(MEDIASYNCITEMS).filter(
                 MEDIASYNCITEMS.SERVER == self.client_id,
                 MEDIASYNCITEMS.TMDBID.isnot(None),
@@ -935,7 +935,6 @@ class Kodi(_IMediaClient):
                 | (MEDIASYNCITEMS.POSTER == '')
                 | (MEDIASYNCITEMS.POSTER.like('nfs://%'))
                 | (MEDIASYNCITEMS.POSTER.like('smb://%'))
-                | (MEDIASYNCITEMS.POSTER.like('/%'))
             ).all()
         except Exception:
             missing = []
@@ -949,25 +948,48 @@ class Kodi(_IMediaClient):
             return
 
         log.info(f"【{self.client_name}】开始同步海报，待处理：{len(missing)}")
-        updated = 0
-        for item in missing:
+
+        def _fetch_one(item):
+            """单条记录：从 TMDB 获取 poster_path，下载海报，返回 (item_id, local_path, raw_path)"""
             try:
-                tmdbid = item.TMDBID
                 if item.ITEM_TYPE == 'Movie':
-                    details = media.movie.details(tmdbid)
+                    details = media.movie.details(item.TMDBID)
                 else:
-                    details = media.tv.details(tmdbid)
+                    details = media.tv.details(item.TMDBID)
                 poster_path = details.get('poster_path') if hasattr(details, 'get') else getattr(details, 'poster_path', None)
                 if not poster_path:
-                    continue
+                    return (item.ITEM_ID, None, None)
                 full_url = Config().get_tmdbimage_url(poster_path)
                 local_poster = MediaDb._download_poster(full_url, item.ITEM_ID)
+                return (item.ITEM_ID, local_poster, poster_path)
+            except Exception:
+                return (item.ITEM_ID, None, None)
+
+        # 并行获取（5 并发）
+        results = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(_fetch_one, item): item.ITEM_ID for item in missing}
+            for future in as_completed(futures):
+                item_id, local_poster, raw_path = future.result()
                 if local_poster:
-                    item.POSTER = local_poster
-                    item.NOTE = poster_path
-                    db.session.commit()
+                    results[item_id] = (local_poster, raw_path)
+
+        # 批量更新数据库
+        updated = 0
+        for item_id, (local_poster, raw_path) in results.items():
+            try:
+                row = db.session.query(MEDIASYNCITEMS).filter(
+                    MEDIASYNCITEMS.SERVER == self.client_id,
+                    MEDIASYNCITEMS.ITEM_ID == item_id
+                ).first()
+                if row:
+                    row.POSTER = local_poster
+                    row.NOTE = raw_path
                     updated += 1
             except Exception:
                 db.session.rollback()
-                continue
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         log.info(f"【{self.client_name}】海报同步完成，已更新：{updated}/{len(missing)}")
