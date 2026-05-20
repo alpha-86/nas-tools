@@ -925,9 +925,13 @@ class Kodi(_IMediaClient):
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from app.db import MediaDb
         from app.db.models import MEDIASYNCITEMS
-        db = MediaDb()
+
+        # 用独立 session 读取待处理列表
+        session = MediaDb().session
         try:
-            missing = db.session.query(MEDIASYNCITEMS).filter(
+            missing_items = session.query(
+                MEDIASYNCITEMS.ITEM_ID, MEDIASYNCITEMS.ITEM_TYPE, MEDIASYNCITEMS.TMDBID
+            ).filter(
                 MEDIASYNCITEMS.SERVER == self.client_id,
                 MEDIASYNCITEMS.TMDBID.isnot(None),
                 MEDIASYNCITEMS.TMDBID != '',
@@ -937,8 +941,11 @@ class Kodi(_IMediaClient):
                 | (MEDIASYNCITEMS.POSTER.like('smb://%'))
             ).all()
         except Exception:
-            missing = []
-        if not missing:
+            missing_items = []
+        finally:
+            session.close()
+
+        if not missing_items:
             log.info(f"【{self.client_name}】无需更新海报")
             return
 
@@ -947,38 +954,45 @@ class Kodi(_IMediaClient):
             log.warn(f"【{self.client_name}】TMDB 未配置，跳过海报同步")
             return
 
-        log.info(f"【{self.client_name}】开始同步海报，待处理：{len(missing)}")
+        log.info(f"【{self.client_name}】开始同步海报，待处理：{len(missing_items)}")
 
-        def _fetch_one(item):
-            """单条记录：从 TMDB 获取 poster_path，下载海报，返回 (item_id, local_path, raw_path)"""
+        def _fetch_one(item_id, item_type, tmdbid):
+            """从 TMDB 获取海报并下载，返回 (item_id, local_path, raw_path)"""
             try:
-                if item.ITEM_TYPE == 'Movie':
-                    details = media.movie.details(item.TMDBID)
+                if item_type == 'Movie':
+                    details = media.movie.details(tmdbid)
                 else:
-                    details = media.tv.details(item.TMDBID)
+                    details = media.tv.details(tmdbid)
                 poster_path = details.get('poster_path') if hasattr(details, 'get') else getattr(details, 'poster_path', None)
                 if not poster_path:
-                    return (item.ITEM_ID, None, None)
+                    return (item_id, None, None)
                 full_url = Config().get_tmdbimage_url(poster_path)
-                local_poster = MediaDb._download_poster(full_url, item.ITEM_ID)
-                return (item.ITEM_ID, local_poster, poster_path)
+                local_poster = MediaDb._download_poster(full_url, item_id)
+                return (item_id, local_poster, poster_path)
             except Exception:
-                return (item.ITEM_ID, None, None)
+                return (item_id, None, None)
 
         # 并行获取（5 并发）
         results = {}
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(_fetch_one, item): item.ITEM_ID for item in missing}
+            futures = {
+                executor.submit(_fetch_one, r.ITEM_ID, r.ITEM_TYPE, r.TMDBID): r.ITEM_ID
+                for r in missing_items
+            }
             for future in as_completed(futures):
                 item_id, local_poster, raw_path = future.result()
                 if local_poster:
                     results[item_id] = (local_poster, raw_path)
 
-        # 批量更新数据库
+        # 用新 session 批量更新数据库
+        if not results:
+            log.info(f"【{self.client_name}】海报同步完成，无新海报")
+            return
+        update_session = MediaDb().session
         updated = 0
-        for item_id, (local_poster, raw_path) in results.items():
-            try:
-                row = db.session.query(MEDIASYNCITEMS).filter(
+        try:
+            for item_id, (local_poster, raw_path) in results.items():
+                row = update_session.query(MEDIASYNCITEMS).filter(
                     MEDIASYNCITEMS.SERVER == self.client_id,
                     MEDIASYNCITEMS.ITEM_ID == item_id
                 ).first()
@@ -986,10 +1000,10 @@ class Kodi(_IMediaClient):
                     row.POSTER = local_poster
                     row.NOTE = raw_path
                     updated += 1
-            except Exception:
-                db.session.rollback()
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        log.info(f"【{self.client_name}】海报同步完成，已更新：{updated}/{len(missing)}")
+            update_session.commit()
+        except Exception as e:
+            log.error(f"【{self.client_name}】海报数据库更新失败：{e}")
+            update_session.rollback()
+        finally:
+            update_session.close()
+        log.info(f"【{self.client_name}】海报同步完成，已更新：{updated}/{len(missing_items)}")
