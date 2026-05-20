@@ -76,6 +76,8 @@ class MediaDb:
                 poster_path = self._download_poster(raw_poster, iteminfo.get("id"))
             else:
                 poster_path = raw_poster or None
+            # NOTE 字段存储原始 TMDB 海报路径，用于显示时回退下载
+            raw_poster_path = raw_poster if raw_poster.startswith('/') else None
 
             self.session.query(MEDIASYNCITEMS).filter(MEDIASYNCITEMS.SERVER == server_type,
                                                       MEDIASYNCITEMS.ITEM_ID == iteminfo.get("id")).delete()
@@ -91,6 +93,7 @@ class MediaDb:
                 TMDBID=iteminfo.get("tmdbid"),
                 IMDBID=iteminfo.get("imdbid"),
                 POSTER=poster_path,
+                NOTE=raw_poster_path,
                 PATH=iteminfo.get("path"),
                 JSON=json.dumps(seasoninfo)
             ))

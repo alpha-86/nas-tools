@@ -9,6 +9,7 @@ import shutil
 import signal
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from math import floor
 from pathlib import Path
 from urllib.parse import unquote
@@ -29,6 +30,7 @@ from app.helper import RssHelper, PluginHelper
 from app.indexer import Indexer
 from app.media import Category, Media, Bangumi, DouBan, Scraper
 from app.media.meta import MetaInfo, MetaBase
+from app.db import MediaDb
 from app.mediaserver import MediaServer
 from app.mediaserver.client.emby import Emby
 from app.mediaserver.client.jellyfin import Jellyfin
@@ -52,6 +54,9 @@ from config import RMT_MEDIAEXT, RMT_SUBEXT, RMT_AUDIO_TRACK_EXT, Config
 from web.backend.search_torrents import search_medias_for_web, search_media_by_message
 from web.backend.user import User
 from web.backend.web_utils import WebUtils
+
+# 海报懒下载线程池（显示时发现本地缓存缺失则异步下载）
+_poster_download_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='poster_dl')
 
 
 class WebAction:
@@ -2627,7 +2632,21 @@ class WebAction:
             offset=offset
         )
         ret = []
+        config_path = Config().get_config_path()
         for item in items:
+            poster_url = item.POSTER or ''
+            # 检查本地海报缓存是否存在，不存在则异步下载
+            if poster_url:
+                local_file = os.path.join(config_path, poster_url.lstrip('/'))
+                if not os.path.exists(local_file):
+                    poster_url = ''
+            if not poster_url and item.NOTE:
+                # NOTE 存储原始 TMDB 海报路径（如 /abc123.jpg），触发异步下载
+                tmdb_poster_path = item.NOTE
+                poster_url = Config().get_tmdbimage_url(tmdb_poster_path)
+                def _lazy_download(path=tmdb_poster_path, item_id=item.ITEM_ID):
+                    MediaDb._download_poster(Config().get_tmdbimage_url(path), item_id)
+                _poster_download_executor.submit(_lazy_download)
             ret.append({
                 "id": item.ITEM_ID,
                 "title": item.TITLE,
@@ -2635,7 +2654,7 @@ class WebAction:
                 "year": item.YEAR,
                 "tmdbid": item.TMDBID,
                 "imdbid": item.IMDBID,
-                "poster": item.POSTER or '',
+                "poster": poster_url,
                 "type": item.ITEM_TYPE,
                 "path": item.PATH
             })
