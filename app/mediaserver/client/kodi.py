@@ -101,9 +101,56 @@ class Kodi(_IMediaClient):
     def get_activity_log(self, num):
         """
         获取活动记录
-        不支持
+        从 files.lastPlayed 获取最近播放记录
         """
-        return []
+        conn = self._get_connection()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                ret_array = []
+                # 最近播放的电影
+                cursor.execute(
+                    "SELECT m.c00 AS title, f.lastPlayed "
+                    "FROM movie m JOIN files f ON m.idFile = f.idFile "
+                    "WHERE f.lastPlayed IS NOT NULL AND f.lastPlayed != '' "
+                    "ORDER BY f.lastPlayed DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    ret_array.append({
+                        "type": "PL",
+                        "event": row['title'],
+                        "date": row['lastPlayed']
+                    })
+                # 最近播放的剧集
+                cursor.execute(
+                    "SELECT e.c00 AS title, t.c00 AS show_title, f.lastPlayed "
+                    "FROM episode e "
+                    "JOIN files f ON e.idFile = f.idFile "
+                    "JOIN tvshow t ON e.idShow = t.idShow "
+                    "WHERE f.lastPlayed IS NOT NULL AND f.lastPlayed != '' "
+                    "ORDER BY f.lastPlayed DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    title = f"{row['show_title']} - {row['title']}" if row['show_title'] else row['title']
+                    ret_array.append({
+                        "type": "PL",
+                        "event": title,
+                        "date": row['lastPlayed']
+                    })
+                # 按时间倒序
+                ret_array.sort(key=lambda x: x['date'], reverse=True)
+                return ret_array[:num]
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取活动记录失败：{str(e)}")
+            return []
+        finally:
+            conn.close()
 
     def get_medias_count(self):
         """
@@ -313,6 +360,7 @@ class Kodi(_IMediaClient):
         获取媒体服务器所有媒体库列表
         Kodi 按视频类型分为电影和剧集两个库
         """
+        domain = Config().get_domain() or ''
         return [
             {
                 'id': 'movies',
@@ -320,7 +368,7 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.MOVIE.value,
                 'image': '',
-                'link': ''
+                'link': f"{domain}/library_browse?library=movies&name=电影"
             },
             {
                 'id': 'tvshows',
@@ -328,7 +376,7 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.TV.value,
                 'image': '',
-                'link': ''
+                'link': f"{domain}/library_browse?library=tvshows&name=剧集"
             }
         ]
 
@@ -405,9 +453,27 @@ class Kodi(_IMediaClient):
     def get_play_url(self, item_id):
         """
         获取媒体播放链接
-        不支持
+        返回 nastools 媒体详情页链接（需 TMDB ID）
         """
-        return ""
+        media_type, raw_id = self.__parse_item_id(item_id)
+        if not raw_id:
+            return ""
+
+        if media_type == 'movie':
+            mtype = "MOV"
+        elif media_type == 'tvshow':
+            mtype = "TV"
+        else:
+            return ""
+
+        tmdbid = self.__get_tmdb_id(raw_id, media_type)
+        if not tmdbid:
+            return ""
+
+        domain = Config().get_domain()
+        if domain:
+            return f"{domain}/web#media_detail?id={tmdbid}&type={mtype}"
+        return f"/web#media_detail?id={tmdbid}&type={mtype}"
 
     def get_playing_sessions(self):
         """
@@ -560,13 +626,128 @@ class Kodi(_IMediaClient):
     def get_resume(self, num=12):
         """
         获得继续观看
-        Kodi无跨设备播放进度同步，空实现
+        从 bookmark 表获取播放进度
         """
-        return []
+        conn = self._get_connection()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                ret_resume = []
+                # 电影的播放进度
+                cursor.execute(
+                    "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
+                    "m.idMovie, m.c00 AS title "
+                    "FROM bookmark b JOIN movie m ON b.idFile = m.idFile "
+                    "WHERE b.type = 1 "
+                    "ORDER BY b.idBookmark DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    item_id = f"movie:{row['idMovie']}"
+                    total = row['totalTimeInSeconds'] or 1
+                    percent = round(row['timeInSeconds'] / total * 100, 1)
+                    image = self.get_local_image_by_id(item_id)
+                    ret_resume.append({
+                        "id": item_id,
+                        "name": row['title'],
+                        "type": MediaType.MOVIE.value,
+                        "image": image or "",
+                        "link": self.get_play_url(item_id),
+                        "percent": percent
+                    })
+                # 剧集的播放进度
+                cursor.execute(
+                    "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
+                    "e.idShow, e.c12 AS season, e.c13 AS episode, e.c00 AS title "
+                    "FROM bookmark b JOIN episode e ON b.idFile = e.idFile "
+                    "WHERE b.type = 1 "
+                    "ORDER BY b.idBookmark DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    item_id = f"tvshow:{row['idShow']}"
+                    total = row['totalTimeInSeconds'] or 1
+                    percent = round(row['timeInSeconds'] / total * 100, 1)
+                    image = self.get_local_image_by_id(item_id)
+                    season = row['season'] or ''
+                    episode = row['episode'] or ''
+                    name = row['title'] or f"第{season}季第{episode}集"
+                    ret_resume.append({
+                        "id": item_id,
+                        "name": name,
+                        "type": MediaType.TV.value,
+                        "image": image or "",
+                        "link": self.get_play_url(item_id),
+                        "percent": percent
+                    })
+                return ret_resume[:num]
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取继续观看失败：{str(e)}")
+            return []
+        finally:
+            conn.close()
 
     def get_latest(self, num=20):
         """
         获得最近更新
-        第一版空实现
+        从 files.dateAdded 获取最近添加的媒体
         """
-        return []
+        conn = self._get_connection()
+        if not conn:
+            return []
+        try:
+            with conn.cursor() as cursor:
+                ret_latest = []
+                # 最近添加的电影
+                cursor.execute(
+                    "SELECT m.idMovie, m.c00 AS title, f.dateAdded "
+                    "FROM movie m JOIN files f ON m.idFile = f.idFile "
+                    "WHERE f.dateAdded IS NOT NULL AND f.dateAdded != '' "
+                    "ORDER BY f.dateAdded DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    item_id = f"movie:{row['idMovie']}"
+                    image = self.get_local_image_by_id(item_id)
+                    ret_latest.append({
+                        "id": item_id,
+                        "name": row['title'],
+                        "type": MediaType.MOVIE.value,
+                        "image": image or "",
+                        "link": self.get_play_url(item_id)
+                    })
+                # 最近添加的剧集（按最新一集的 dateAdded）
+                cursor.execute(
+                    "SELECT t.idShow, t.c00 AS title, MAX(f.dateAdded) AS maxDate "
+                    "FROM tvshow t "
+                    "JOIN episode e ON t.idShow = e.idShow "
+                    "JOIN files f ON e.idFile = f.idFile "
+                    "WHERE f.dateAdded IS NOT NULL AND f.dateAdded != '' "
+                    "GROUP BY t.idShow "
+                    "ORDER BY maxDate DESC "
+                    "LIMIT %s",
+                    (num,)
+                )
+                for row in cursor.fetchall():
+                    item_id = f"tvshow:{row['idShow']}"
+                    image = self.get_local_image_by_id(item_id)
+                    ret_latest.append({
+                        "id": item_id,
+                        "name": row['title'],
+                        "type": MediaType.TV.value,
+                        "image": image or "",
+                        "link": self.get_play_url(item_id)
+                    })
+                # 合并后按 dateAdded 倒序（简化处理：电影和剧集分别查询后截取）
+                return ret_latest[:num]
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】获取最近添加失败：{str(e)}")
+            return []
+        finally:
+            conn.close()

@@ -129,3 +129,20 @@ class MediaDb:
         if not server_type:
             return None
         return self.session.query(MEDIASYNCSTATISTIC).filter(MEDIASYNCSTATISTIC.SERVER == server_type).first()
+
+    def list_by_library(self, server_type, library=None, item_type=None, limit=100, offset=0):
+        """
+        按库列出同步的媒体项目
+        """
+        if not server_type:
+            return []
+        try:
+            query = self.session.query(MEDIASYNCITEMS).filter(MEDIASYNCITEMS.SERVER == server_type)
+            if library:
+                query = query.filter(MEDIASYNCITEMS.LIBRARY == library)
+            if item_type:
+                query = query.filter(MEDIASYNCITEMS.ITEM_TYPE == item_type)
+            return query.order_by(MEDIASYNCITEMS.ID.desc()).limit(limit).offset(offset).all()
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return []

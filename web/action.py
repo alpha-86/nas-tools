@@ -2607,6 +2607,39 @@ class WebAction:
                                         status.get("time"))}
 
     @staticmethod
+    def __get_library_items(data):
+        """
+        获取媒体库内项目列表（从本地同步数据库查询）
+        """
+        library = data.get("library")
+        item_type = data.get("type")
+        limit = int(data.get("limit", 100))
+        offset = int(data.get("offset", 0))
+        server_type = Config().get_config('media').get('media_server')
+        if not server_type:
+            return {"code": 1, "msg": "未配置媒体服务器"}
+        items = MediaServer().mediadb.list_by_library(
+            server_type=server_type,
+            library=library,
+            item_type=item_type,
+            limit=limit,
+            offset=offset
+        )
+        ret = []
+        for item in items:
+            ret.append({
+                "id": item.ITEM_ID,
+                "title": item.TITLE,
+                "original_title": item.ORGIN_TITLE,
+                "year": item.YEAR,
+                "tmdbid": item.TMDBID,
+                "imdbid": item.IMDBID,
+                "type": item.ITEM_TYPE,
+                "path": item.PATH
+            })
+        return {"code": 0, "items": ret}
+
+    @staticmethod
     def __get_tvseason_list(data):
         """
         获取剧集季列表

@@ -1,0 +1,77 @@
+{% import 'macro/svg.html' as SVG %}
+<div class="container-xl">
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <h2 class="page-title">
+          {{ LibraryName }}
+        </h2>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="page-body">
+  <div class="container-xl">
+    <div id="library_items_grid" class="d-grid gap-3 grid-normal-card">
+      <!-- 媒体项将通过 AJAX 加载 -->
+    </div>
+    <div id="library_items_loading" class="text-center mt-3">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">加载中...</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript">
+  // 加载库内媒体列表
+  function load_library_items() {
+    const library = '{{ Library }}';
+    const grid = document.getElementById('library_items_grid');
+    const loading = document.getElementById('library_items_loading');
+
+    ajax_post("get_library_items", {
+      "library": library,
+      "limit": 100
+    }, function (ret) {
+      loading.style.display = 'none';
+      if (ret.code === 0 && ret.items && ret.items.length > 0) {
+        ret.items.forEach(function (item) {
+          const card = document.createElement('a');
+          card.className = 'card card-link-pop rounded-3 overflow-hidden';
+          card.style.cursor = 'pointer';
+
+          // 构造媒体详情页链接
+          const mtype = item.type === 'Movie' ? 'MOV' : 'TV';
+          const detailUrl = '/web#media_detail?id=' + (item.tmdbid || '') + '&type=' + mtype;
+          card.href = detailUrl;
+
+          let imageHtml = '';
+          if (item.tmdbid) {
+            imageHtml = '<custom-img img-class="w-100" img-src="img?url=https://image.tmdb.org/t/p/w500' + item.tmdbid + '.jpg" img-ratio="150%" img-style="object-fit: cover;"></custom-img>';
+          } else {
+            imageHtml = '<div class="bg-secondary text-white d-flex align-items-center justify-content-center" style="aspect-ratio: 2/3;"><span class="h4">' + (item.title || '未知') + '</span></div>';
+          }
+
+          const typeBadge = item.type === 'Movie'
+            ? '<span class="badge badge-pill bg-green" style="position: absolute; top: 10px; left: 10px">电影</span>'
+            : '<span class="badge badge-pill bg-blue" style="position: absolute; top: 10px; left: 10px">剧集</span>';
+
+          card.innerHTML = imageHtml + typeBadge +
+            '<div class="m-2 text-center" style="-webkit-line-clamp:2; display: -webkit-box; -webkit-box-orient:vertical; overflow:hidden; text-overflow: ellipsis;">' +
+            (item.title || '') + ' <span class="text-muted">(' + (item.year || '') + ')</span>' +
+            '</div>';
+
+          grid.appendChild(card);
+        });
+      } else {
+        grid.innerHTML = '<div class="col-12 text-center text-muted">暂无数据，请先执行媒体库同步</div>';
+      }
+    });
+  }
+
+  // 页面加载完成后执行
+  $(document).ready(function () {
+    load_library_items();
+  });
+</script>

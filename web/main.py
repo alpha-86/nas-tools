@@ -963,6 +963,17 @@ def library():
                            Config=Config().get_config())
 
 
+# 媒体库浏览页面（Kodi 等无 Web UI 的媒体服务器）
+@App.route('/library_browse', methods=['POST', 'GET'])
+@login_required
+def library_browse():
+    library = request.args.get("library", "")
+    library_name = request.args.get("name", "")
+    return render_template("library_browse.html",
+                           Library=library,
+                           LibraryName=library_name)
+
+
 # 媒体服务器页面
 @App.route('/mediaserver', methods=['POST', 'GET'])
 @login_required
