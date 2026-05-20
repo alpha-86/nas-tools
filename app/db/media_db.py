@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import QueuePool
 
-from app.db.models import BaseMedia, MEDIASYNCITEMS, MEDIASYNCSTATISTIC
+from app.db.models import BaseMedia, MEDIASYNCITEMS, MEDIASYNCSTATISTIC, KODISYNCEXTRA
 from app.utils import ExceptionUtils
 from config import Config
 
@@ -145,4 +145,82 @@ class MediaDb:
             return query.order_by(MEDIASYNCITEMS.ID.desc()).limit(limit).offset(offset).all()
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
+            return []
+
+    def clear_extra(self, server_type):
+        """清空 Kodi 额外缓存数据"""
+        if not server_type:
+            return False
+        try:
+            self.session.query(KODISYNCEXTRA).filter(KODISYNCEXTRA.SERVER == server_type).delete()
+            self.session.commit()
+            return True
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            self.session.rollback()
+            return False
+
+    def insert_extra(self, server_type, iteminfo):
+        """插入/更新 Kodi 额外缓存数据"""
+        if not server_type or not iteminfo:
+            return False
+        try:
+            self.session.query(KODISYNCEXTRA).filter(
+                KODISYNCEXTRA.SERVER == server_type,
+                KODISYNCEXTRA.ITEM_ID == iteminfo.get("id")
+            ).delete()
+            self.session.flush()
+            self.session.add(KODISYNCEXTRA(
+                SERVER=server_type,
+                ITEM_ID=iteminfo.get("id"),
+                ITEM_TYPE=iteminfo.get("type"),
+                TITLE=iteminfo.get("title"),
+                TMDBID=iteminfo.get("tmdbid"),
+                LAST_PLAYED=iteminfo.get("last_played"),
+                DATE_ADDED=iteminfo.get("date_added"),
+                PLAY_TIME=iteminfo.get("play_time"),
+                PLAY_TOTAL=iteminfo.get("play_total"),
+                PLAY_PERCENT=iteminfo.get("play_percent"),
+            ))
+            self.session.commit()
+            return True
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            self.session.rollback()
+            return False
+
+    def get_resume_items(self, server_type, num=12):
+        """从本地缓存获取继续观看（按 PLAY_TIME 降序）"""
+        if not server_type:
+            return []
+        try:
+            return self.session.query(KODISYNCEXTRA).filter(
+                KODISYNCEXTRA.SERVER == server_type,
+                KODISYNCEXTRA.PLAY_TIME.isnot(None)
+            ).order_by(KODISYNCEXTRA.PLAY_TIME.desc()).limit(num).all()
+        except Exception:
+            return []
+
+    def get_latest_items(self, server_type, num=20):
+        """从本地缓存获取最近添加（按 DATE_ADDED 降序）"""
+        if not server_type:
+            return []
+        try:
+            return self.session.query(KODISYNCEXTRA).filter(
+                KODISYNCEXTRA.SERVER == server_type,
+                KODISYNCEXTRA.DATE_ADDED.isnot(None)
+            ).order_by(KODISYNCEXTRA.DATE_ADDED.desc()).limit(num).all()
+        except Exception:
+            return []
+
+    def get_activity_items(self, server_type, num=30):
+        """从本地缓存获取活动记录（按 LAST_PLAYED 降序）"""
+        if not server_type:
+            return []
+        try:
+            return self.session.query(KODISYNCEXTRA).filter(
+                KODISYNCEXTRA.SERVER == server_type,
+                KODISYNCEXTRA.LAST_PLAYED.isnot(None)
+            ).order_by(KODISYNCEXTRA.LAST_PLAYED.desc()).limit(num).all()
+        except Exception:
             return []

@@ -267,6 +267,11 @@ class MediaServer:
                                     total_count=total_count,
                                     movie_count=movie_count,
                                     tv_count=tv_count)
+            # 同步额外数据（如 Kodi 的播放进度、时间戳到本地缓存）
+            if self.server and hasattr(self.server, 'sync_extra_data'):
+                self.progress.update(ptype=ProgressKey.MediaSync,
+                                     text="正在同步额外数据...")
+                self.server.sync_extra_data()
             # 结束进度条
             self.progress.update(ptype=ProgressKey.MediaSync,
                                  value=100,

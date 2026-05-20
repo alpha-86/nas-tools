@@ -109,18 +109,33 @@ class Kodi(_IMediaClient):
     def get_activity_log(self, num):
         """
         获取活动记录
-        从 files.lastPlayed 获取最近播放记录
+        优先从本地 SQLite 缓存查询，无数据时回退到 MySQL
         """
         cache_key = f"activity:{num}"
         if cache_key in Kodi._cache:
             return list(Kodi._cache[cache_key])
+        try:
+            from app.db import MediaDb
+            items = MediaDb().get_activity_items(self.client_id, num)
+            if items:
+                ret_array = []
+                for item in items:
+                    ret_array.append({
+                        "type": "PL",
+                        "event": item.TITLE or "",
+                        "date": item.LAST_PLAYED or ""
+                    })
+                Kodi._cache[cache_key] = ret_array
+                return ret_array
+        except Exception:
+            pass
+        # 回退到 MySQL 查询
         conn = self._get_connection()
         if not conn:
             return []
         try:
             with conn.cursor() as cursor:
                 ret_array = []
-                # 最近播放的电影
                 cursor.execute(
                     "SELECT m.c00 AS title, f.lastPlayed "
                     "FROM movie m JOIN files f ON m.idFile = f.idFile "
@@ -130,16 +145,10 @@ class Kodi(_IMediaClient):
                     (num,)
                 )
                 for row in cursor.fetchall():
-                    ret_array.append({
-                        "type": "PL",
-                        "event": row['title'],
-                        "date": row['lastPlayed']
-                    })
-                # 最近播放的剧集
+                    ret_array.append({"type": "PL", "event": row['title'], "date": row['lastPlayed']})
                 cursor.execute(
                     "SELECT e.c00 AS title, t.c00 AS show_title, f.lastPlayed "
-                    "FROM episode e "
-                    "JOIN files f ON e.idFile = f.idFile "
+                    "FROM episode e JOIN files f ON e.idFile = f.idFile "
                     "JOIN tvshow t ON e.idShow = t.idShow "
                     "WHERE f.lastPlayed IS NOT NULL AND f.lastPlayed != '' "
                     "ORDER BY f.lastPlayed DESC "
@@ -148,12 +157,7 @@ class Kodi(_IMediaClient):
                 )
                 for row in cursor.fetchall():
                     title = f"{row['show_title']} - {row['title']}" if row['show_title'] else row['title']
-                    ret_array.append({
-                        "type": "PL",
-                        "event": title,
-                        "date": row['lastPlayed']
-                    })
-                # 按时间倒序
+                    ret_array.append({"type": "PL", "event": title, "date": row['lastPlayed']})
                 ret_array.sort(key=lambda x: x['date'], reverse=True)
                 result = ret_array[:num]
                 Kodi._cache[cache_key] = result
@@ -639,11 +643,35 @@ class Kodi(_IMediaClient):
     def get_resume(self, num=12):
         """
         获得继续观看
-        从 bookmark 表获取播放进度
+        优先从本地 SQLite 缓存查询，无数据时回退到 MySQL bookmark 表
         """
         cache_key = f"resume:{num}"
         if cache_key in Kodi._cache:
             return list(Kodi._cache[cache_key])
+        try:
+            from app.db import MediaDb
+            items = MediaDb().get_resume_items(self.client_id, num)
+            if items:
+                ret_resume = []
+                domain = Config().get_domain() or ''
+                for row in items:
+                    tmdbid = row.TMDBID or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
+                    mtype = row.ITEM_TYPE or ''
+                    percent = round(row.PLAY_PERCENT or 0, 1)
+                    ret_resume.append({
+                        "id": row.ITEM_ID,
+                        "name": row.TITLE or "",
+                        "type": mtype,
+                        "image": "",
+                        "link": link,
+                        "percent": percent
+                    })
+                Kodi._cache[cache_key] = ret_resume
+                return ret_resume
+        except Exception:
+            pass
+        # 回退到 MySQL 查询
         conn = self._get_connection()
         if not conn:
             return []
@@ -651,7 +679,6 @@ class Kodi(_IMediaClient):
             with conn.cursor() as cursor:
                 ret_resume = []
                 domain = Config().get_domain() or ''
-                # 电影的播放进度（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
                     "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
                     "m.idMovie, m.c00 AS title, "
@@ -678,7 +705,6 @@ class Kodi(_IMediaClient):
                         "link": link,
                         "percent": percent
                     })
-                # 剧集的播放进度（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
                     "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
                     "e.idShow, e.c12 AS season, e.c13 AS episode, e.c00 AS title, "
@@ -721,11 +747,33 @@ class Kodi(_IMediaClient):
     def get_latest(self, num=20):
         """
         获得最近更新
-        从 files.dateAdded 获取最近添加的媒体
+        优先从本地 SQLite 缓存查询，无数据时回退到 MySQL
         """
         cache_key = f"latest:{num}"
         if cache_key in Kodi._cache:
             return list(Kodi._cache[cache_key])
+        try:
+            from app.db import MediaDb
+            items = MediaDb().get_latest_items(self.client_id, num)
+            if items:
+                ret_latest = []
+                domain = Config().get_domain() or ''
+                for row in items:
+                    tmdbid = row.TMDBID or ''
+                    mtype = row.ITEM_TYPE or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid and mtype == 'Movie' else (f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else "")
+                    ret_latest.append({
+                        "id": row.ITEM_ID,
+                        "name": row.TITLE or "",
+                        "type": mtype,
+                        "image": "",
+                        "link": link
+                    })
+                Kodi._cache[cache_key] = ret_latest
+                return ret_latest
+        except Exception:
+            pass
+        # 回退到 MySQL 查询
         conn = self._get_connection()
         if not conn:
             return []
@@ -733,7 +781,6 @@ class Kodi(_IMediaClient):
             with conn.cursor() as cursor:
                 ret_latest = []
                 domain = Config().get_domain() or ''
-                # 最近添加的电影（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
                     "SELECT m.idMovie, m.c00 AS title, f.dateAdded, "
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
@@ -756,7 +803,6 @@ class Kodi(_IMediaClient):
                         "image": "",
                         "link": link
                     })
-                # 最近添加的剧集（按最新一集的 dateAdded，一次性 LEFT JOIN uniqueid）
                 cursor.execute(
                     "SELECT t.idShow, t.c00 AS title, MAX(f.dateAdded) AS maxDate, "
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
@@ -788,5 +834,78 @@ class Kodi(_IMediaClient):
             ExceptionUtils.exception_traceback(e)
             log.error(f"【{self.client_name}】获取最近添加失败：{str(e)}")
             return []
+        finally:
+            conn.close()
+
+    def sync_extra_data(self):
+        """
+        同步 Kodi 的播放进度和时间戳到本地 SQLite 缓存
+        由 MediaServer.sync_mediaserver() 在同步完成后调用
+        """
+        from app.db import MediaDb
+        db = MediaDb()
+        db.clear_extra(self.client_id)
+        conn = self._get_connection()
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cursor:
+                # 电影：bookmark + files + uniqueid
+                cursor.execute(
+                    "SELECT m.idMovie, m.c00 AS title, "
+                    "b.timeInSeconds, b.totalTimeInSeconds, "
+                    "f.lastPlayed, f.dateAdded, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
+                    "FROM movie m "
+                    "LEFT JOIN bookmark b ON b.idFile = m.idFile AND b.type = 1 "
+                    "LEFT JOIN files f ON f.idFile = m.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' AND u.type = 'tmdb' "
+                    "GROUP BY m.idMovie, m.c00, b.timeInSeconds, b.totalTimeInSeconds, f.lastPlayed, f.dateAdded"
+                )
+                for row in cursor.fetchall():
+                    total = row['totalTimeInSeconds'] or 1
+                    percent = round(row['timeInSeconds'] / total * 100, 1) if row['timeInSeconds'] else None
+                    db.insert_extra(self.client_id, {
+                        "id": f"movie:{row['idMovie']}",
+                        "type": "Movie",
+                        "title": row['title'],
+                        "tmdbid": row.get('tmdbid') or '',
+                        "last_played": row.get('lastPlayed') or '',
+                        "date_added": row.get('dateAdded') or '',
+                        "play_time": row.get('timeInSeconds'),
+                        "play_total": row.get('totalTimeInSeconds'),
+                        "play_percent": percent
+                    })
+                # 剧集：通过 episode 关联 bookmark + files + uniqueid
+                cursor.execute(
+                    "SELECT t.idShow, t.c00 AS title, "
+                    "MAX(b.timeInSeconds) AS maxTime, MAX(b.totalTimeInSeconds) AS maxTotal, "
+                    "MAX(f.lastPlayed) AS maxLastPlayed, MAX(f.dateAdded) AS maxDateAdded, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
+                    "FROM tvshow t "
+                    "LEFT JOIN episode e ON e.idShow = t.idShow "
+                    "LEFT JOIN bookmark b ON b.idFile = e.idFile AND b.type = 1 "
+                    "LEFT JOIN files f ON f.idFile = e.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
+                    "GROUP BY t.idShow, t.c00"
+                )
+                for row in cursor.fetchall():
+                    total = row['maxTotal'] or 1
+                    percent = round(row['maxTime'] / total * 100, 1) if row['maxTime'] else None
+                    db.insert_extra(self.client_id, {
+                        "id": f"tvshow:{row['idShow']}",
+                        "type": "Series",
+                        "title": row['title'],
+                        "tmdbid": row.get('tmdbid') or '',
+                        "last_played": row.get('maxLastPlayed') or '',
+                        "date_added": row.get('maxDateAdded') or '',
+                        "play_time": row.get('maxTime'),
+                        "play_total": row.get('maxTotal'),
+                        "play_percent": percent
+                    })
+            log.info(f"【{self.client_name}】额外数据同步完成")
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            log.error(f"【{self.client_name}】同步额外数据失败：{str(e)}")
         finally:
             conn.close()

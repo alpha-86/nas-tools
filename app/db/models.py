@@ -591,3 +591,29 @@ class MEDIASYNCSTATISTIC(BaseMedia):
     MOVIE_COUNT = Column(Text)
     TV_COUNT = Column(Text)
     UPDATE_TIME = Column(Text)
+
+
+class KODISYNCEXTRA(BaseMedia):
+    """
+    Kodi MySQL 额外数据本地缓存表
+    存储播放进度、最近播放/添加时间，避免首页反复查询 MySQL
+    """
+    __tablename__ = 'KODI_SYNC_EXTRA'
+    __table_args__ = (
+        Index('INDX_KODI_EXTRA_SI', 'SERVER', 'ITEM_ID'),
+        Index('INDX_KODI_EXTRA_LP', 'SERVER', 'LAST_PLAYED'),
+        Index('INDX_KODI_EXTRA_DA', 'SERVER', 'DATE_ADDED'),
+        Index('INDX_KODI_EXTRA_PT', 'SERVER', 'PLAY_TIME'),
+    )
+
+    ID = Column(Integer, Sequence('ID'), primary_key=True)
+    SERVER = Column(Text, index=True)
+    ITEM_ID = Column(Text, index=True)
+    ITEM_TYPE = Column(Text)
+    TITLE = Column(Text)
+    TMDBID = Column(Text)
+    LAST_PLAYED = Column(Text)
+    DATE_ADDED = Column(Text)
+    PLAY_TIME = Column(Float)
+    PLAY_TOTAL = Column(Float)
+    PLAY_PERCENT = Column(Float)
