@@ -29,6 +29,8 @@ _Session = scoped_session(sessionmaker(bind=_Engine,
 
 
 class MediaDb:
+    # 同步时暂存海报信息，避免 empty() 后丢失已下载的海报记录
+    _poster_cache = {}
 
     @property
     def session(self):
@@ -74,22 +76,26 @@ class MediaDb:
         if not server_type or not iteminfo:
             return False
         try:
-            # 处理海报：TMDB 相对路径需转为完整 URL 并下载到本地
-            # 跳过 NFS/SMB 等本地网络路径（Kodi art 表存储的）
-            raw_poster = iteminfo.get("poster") or ''
-            if raw_poster.startswith('/'):
-                full_url = Config().get_tmdbimage_url(raw_poster)
-                poster_path = self._download_poster(full_url, iteminfo.get("id"))
-            elif raw_poster.startswith('http'):
-                poster_path = self._download_poster(raw_poster, iteminfo.get("id"))
+            item_id = iteminfo.get("id")
+            # 优先复用上次同步已下载的海报
+            cached = self._poster_cache.pop(item_id, None)
+            if cached and cached[0]:
+                poster_path = cached[0]
+                raw_poster_path = cached[1]
             else:
-                # NFS/SMB 等路径不存储，留给 sync_posters 从 TMDB 获取
-                poster_path = None
-            # NOTE 字段存储原始 TMDB 海报路径，用于显示时回退下载
-            raw_poster_path = raw_poster if raw_poster.startswith('/') else None
+                # 处理海报：TMDB 相对路径需转为完整 URL 并下载到本地
+                raw_poster = iteminfo.get("poster") or ''
+                if raw_poster.startswith('/'):
+                    full_url = Config().get_tmdbimage_url(raw_poster)
+                    poster_path = self._download_poster(full_url, item_id)
+                elif raw_poster.startswith('http'):
+                    poster_path = self._download_poster(raw_poster, item_id)
+                else:
+                    poster_path = None
+                raw_poster_path = raw_poster if raw_poster.startswith('/') else None
 
             self.session.query(MEDIASYNCITEMS).filter(MEDIASYNCITEMS.SERVER == server_type,
-                                                      MEDIASYNCITEMS.ITEM_ID == iteminfo.get("id")).delete()
+                                                      MEDIASYNCITEMS.ITEM_ID == item_id).delete()
             self.session.flush()
             self.session.add(MEDIASYNCITEMS(
                 SERVER=server_type,
@@ -115,6 +121,21 @@ class MediaDb:
 
     def empty(self, server_type=None, library=None):
         try:
+            # 删除前缓存海报信息，供后续 insert 复用
+            try:
+                query = self.session.query(MEDIASYNCITEMS.ITEM_ID, MEDIASYNCITEMS.POSTER, MEDIASYNCITEMS.NOTE)
+                if server_type and library:
+                    rows = query.filter(MEDIASYNCITEMS.SERVER == server_type,
+                                        MEDIASYNCITEMS.LIBRARY == library).all()
+                elif server_type:
+                    rows = query.filter(MEDIASYNCITEMS.SERVER == server_type).all()
+                else:
+                    rows = query.all()
+                for row in rows:
+                    if row.POSTER:
+                        self._poster_cache[row.ITEM_ID] = (row.POSTER, row.NOTE)
+            except Exception:
+                pass
             if server_type and library:
                 self.session.query(MEDIASYNCITEMS).filter(MEDIASYNCITEMS.SERVER == server_type,
                                                           MEDIASYNCITEMS.LIBRARY == library).delete()
