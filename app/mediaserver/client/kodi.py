@@ -664,12 +664,11 @@ class Kodi(_IMediaClient):
                     item_id = f"movie:{row['idMovie']}"
                     total = row['totalTimeInSeconds'] or 1
                     percent = round(row['timeInSeconds'] / total * 100, 1)
-                    image = self.get_local_image_by_id(item_id)
                     ret_resume.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.MOVIE.value,
-                        "image": image or "",
+                        "image": "",
                         "link": self.get_play_url(item_id),
                         "percent": percent
                     })
@@ -687,7 +686,6 @@ class Kodi(_IMediaClient):
                     item_id = f"tvshow:{row['idShow']}"
                     total = row['totalTimeInSeconds'] or 1
                     percent = round(row['timeInSeconds'] / total * 100, 1)
-                    image = self.get_local_image_by_id(item_id)
                     season = row['season'] or ''
                     episode = row['episode'] or ''
                     name = row['title'] or f"第{season}季第{episode}集"
@@ -695,7 +693,7 @@ class Kodi(_IMediaClient):
                         "id": item_id,
                         "name": name,
                         "type": MediaType.TV.value,
-                        "image": image or "",
+                        "image": "",
                         "link": self.get_play_url(item_id),
                         "percent": percent
                     })
@@ -734,12 +732,11 @@ class Kodi(_IMediaClient):
                 )
                 for row in cursor.fetchall():
                     item_id = f"movie:{row['idMovie']}"
-                    image = self.get_local_image_by_id(item_id)
                     ret_latest.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.MOVIE.value,
-                        "image": image or "",
+                        "image": "",
                         "link": self.get_play_url(item_id)
                     })
                 # 最近添加的剧集（按最新一集的 dateAdded）
@@ -756,12 +753,11 @@ class Kodi(_IMediaClient):
                 )
                 for row in cursor.fetchall():
                     item_id = f"tvshow:{row['idShow']}"
-                    image = self.get_local_image_by_id(item_id)
                     ret_latest.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.TV.value,
-                        "image": image or "",
+                        "image": "",
                         "link": self.get_play_url(item_id)
                     })
                 # 合并后按 dateAdded 倒序（简化处理：电影和剧集分别查询后截取）
