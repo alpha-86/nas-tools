@@ -75,7 +75,10 @@ class MediaServer:
             log.error(f"【MediaServer】启动定时同步失败：{e}")
 
     def _scheduled_sync(self):
-        """定时同步任务入口"""
+        """定时同步任务入口（带锁，防止与手动同步并发）"""
+        if lock.locked():
+            log.info("【MediaServer】已有同步任务运行中，跳过本次定时同步")
+            return
         try:
             log.info("【MediaServer】开始定时媒体库同步...")
             self.sync_mediaserver()
