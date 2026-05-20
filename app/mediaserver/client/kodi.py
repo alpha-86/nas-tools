@@ -916,3 +916,53 @@ class Kodi(_IMediaClient):
             log.error(f"【{self.client_name}】同步额外数据失败：{str(e)}")
         finally:
             conn.close()
+
+    def sync_posters(self):
+        """
+        从 TMDB 获取海报路径并下载到本地缓存
+        遍历 MEDIASYNCITEMS 中有 TMDBID 但缺少本地海报的记录
+        """
+        from app.db import MediaDb
+        from app.db.models import MEDIASYNCITEMS
+        db = MediaDb()
+        try:
+            missing = db.session.query(MEDIASYNCITEMS).filter(
+                MEDIASYNCITEMS.SERVER == self.client_id,
+                MEDIASYNCITEMS.TMDBID.isnot(None),
+                MEDIASYNCITEMS.TMDBID != '',
+                (MEDIASYNCITEMS.POSTER.is_(None)) | (MEDIASYNCITEMS.POSTER == '')
+            ).all()
+        except Exception:
+            missing = []
+        if not missing:
+            log.info(f"【{self.client_name}】无需更新海报")
+            return
+
+        media = Media()
+        if not media.movie or not media.tv:
+            log.warn(f"【{self.client_name}】TMDB 未配置，跳过海报同步")
+            return
+
+        log.info(f"【{self.client_name}】开始同步海报，待处理：{len(missing)}")
+        updated = 0
+        for item in missing:
+            try:
+                tmdbid = item.TMDBID
+                if item.ITEM_TYPE == 'Movie':
+                    details = media.movie.details(tmdbid)
+                else:
+                    details = media.tv.details(tmdbid)
+                poster_path = details.get('poster_path') if hasattr(details, 'get') else getattr(details, 'poster_path', None)
+                if not poster_path:
+                    continue
+                full_url = Config().get_tmdbimage_url(poster_path)
+                local_poster = MediaDb._download_poster(full_url, item.ITEM_ID)
+                if local_poster:
+                    item.POSTER = local_poster
+                    item.NOTE = poster_path
+                    db.session.commit()
+                    updated += 1
+            except Exception:
+                db.session.rollback()
+                continue
+        log.info(f"【{self.client_name}】海报同步完成，已更新：{updated}/{len(missing)}")

@@ -1,6 +1,8 @@
 import json
 import threading
 
+from apscheduler.schedulers.background import BackgroundScheduler
+
 import log
 from app.conf import SystemConfig
 from app.db import MediaDb
@@ -22,6 +24,7 @@ class MediaServer:
 
     _server_type = None
     _server = None
+    _scheduler = None
     mediadb = None
     progress = None
     message = None
@@ -45,6 +48,39 @@ class MediaServer:
         # 当前使用的媒体库服务器
         self._server_type = Config().get_config('media').get('media_server') or 'emby'
         self._server = None
+        # 配置了媒体服务器则启动定时同步（每30分钟）
+        self._start_scheduler()
+
+    def _start_scheduler(self):
+        """若已配置媒体服务器，启动定时同步调度器"""
+        # 先停止已有调度器
+        if self._scheduler:
+            try:
+                self._scheduler.shutdown(wait=False)
+            except Exception:
+                pass
+            self._scheduler = None
+        # 未配置媒体服务器则不启动
+        if not self._server_type:
+            return
+        try:
+            self._scheduler = BackgroundScheduler(timezone=Config().get_timezone())
+            self._scheduler.add_job(func=self._scheduled_sync,
+                                    trigger='interval',
+                                    minutes=30,
+                                    id='mediasync_periodic')
+            self._scheduler.start()
+            log.info("【MediaServer】定时媒体库同步已启动（每30分钟）")
+        except Exception as e:
+            log.error(f"【MediaServer】启动定时同步失败：{e}")
+
+    def _scheduled_sync(self):
+        """定时同步任务入口"""
+        try:
+            log.info("【MediaServer】开始定时媒体库同步...")
+            self.sync_mediaserver()
+        except Exception as e:
+            log.error(f"【MediaServer】定时同步异常：{e}")
 
     def __build_class(self, ctype, conf):
         for mediaserver_schema in self._mediaserver_schemas:
@@ -272,6 +308,11 @@ class MediaServer:
                 self.progress.update(ptype=ProgressKey.MediaSync,
                                      text="正在同步额外数据...")
                 self.server.sync_extra_data()
+            # 同步海报（从 TMDB 获取海报并缓存到本地）
+            if self.server and hasattr(self.server, 'sync_posters'):
+                self.progress.update(ptype=ProgressKey.MediaSync,
+                                     text="正在同步海报...")
+                self.server.sync_posters()
             # 结束进度条
             self.progress.update(ptype=ProgressKey.MediaSync,
                                  value=100,
