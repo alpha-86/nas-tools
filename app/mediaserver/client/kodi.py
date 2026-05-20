@@ -27,8 +27,8 @@ class Kodi(_IMediaClient):
     _dbpassword = None
     _dbname = None
 
-    # 类级别缓存（TTL 60s）用于首页实时数据，避免每次刷新都查 MySQL
-    _cache = TTLCache(maxsize=16, ttl=60)
+    # 类级别缓存（TTL 300s）用于首页实时数据，避免每次刷新都查 MySQL
+    _cache = TTLCache(maxsize=16, ttl=300)
 
     @staticmethod
     def _cache_key(method, *args, **kwargs):
@@ -650,12 +650,16 @@ class Kodi(_IMediaClient):
         try:
             with conn.cursor() as cursor:
                 ret_resume = []
-                # 电影的播放进度
+                domain = Config().get_domain() or ''
+                # 电影的播放进度（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
                     "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
-                    "m.idMovie, m.c00 AS title "
+                    "m.idMovie, m.c00 AS title, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM bookmark b JOIN movie m ON b.idFile = m.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' AND u.type = 'tmdb' "
                     "WHERE b.type = 1 "
+                    "GROUP BY b.idBookmark, m.idMovie, m.c00, b.timeInSeconds, b.totalTimeInSeconds "
                     "ORDER BY b.idBookmark DESC "
                     "LIMIT %s",
                     (num,)
@@ -664,20 +668,25 @@ class Kodi(_IMediaClient):
                     item_id = f"movie:{row['idMovie']}"
                     total = row['totalTimeInSeconds'] or 1
                     percent = round(row['timeInSeconds'] / total * 100, 1)
+                    tmdbid = row.get('tmdbid') or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
                     ret_resume.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.MOVIE.value,
                         "image": "",
-                        "link": self.get_play_url(item_id),
+                        "link": link,
                         "percent": percent
                     })
-                # 剧集的播放进度
+                # 剧集的播放进度（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
                     "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
-                    "e.idShow, e.c12 AS season, e.c13 AS episode, e.c00 AS title "
+                    "e.idShow, e.c12 AS season, e.c13 AS episode, e.c00 AS title, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM bookmark b JOIN episode e ON b.idFile = e.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = e.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
                     "WHERE b.type = 1 "
+                    "GROUP BY b.idBookmark, e.idShow, e.c12, e.c13, e.c00, b.timeInSeconds, b.totalTimeInSeconds "
                     "ORDER BY b.idBookmark DESC "
                     "LIMIT %s",
                     (num,)
@@ -689,12 +698,14 @@ class Kodi(_IMediaClient):
                     season = row['season'] or ''
                     episode = row['episode'] or ''
                     name = row['title'] or f"第{season}季第{episode}集"
+                    tmdbid = row.get('tmdbid') or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else ""
                     ret_resume.append({
                         "id": item_id,
                         "name": name,
                         "type": MediaType.TV.value,
                         "image": "",
-                        "link": self.get_play_url(item_id),
+                        "link": link,
                         "percent": percent
                     })
                 result = ret_resume[:num]
@@ -721,46 +732,55 @@ class Kodi(_IMediaClient):
         try:
             with conn.cursor() as cursor:
                 ret_latest = []
-                # 最近添加的电影
+                domain = Config().get_domain() or ''
+                # 最近添加的电影（一次性 LEFT JOIN uniqueid 获取 tmdbid）
                 cursor.execute(
-                    "SELECT m.idMovie, m.c00 AS title, f.dateAdded "
+                    "SELECT m.idMovie, m.c00 AS title, f.dateAdded, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM movie m JOIN files f ON m.idFile = f.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = m.idMovie AND u.media_type = 'movie' AND u.type = 'tmdb' "
                     "WHERE f.dateAdded IS NOT NULL AND f.dateAdded != '' "
+                    "GROUP BY m.idMovie, m.c00, f.dateAdded "
                     "ORDER BY f.dateAdded DESC "
                     "LIMIT %s",
                     (num,)
                 )
                 for row in cursor.fetchall():
                     item_id = f"movie:{row['idMovie']}"
+                    tmdbid = row.get('tmdbid') or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
                     ret_latest.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.MOVIE.value,
                         "image": "",
-                        "link": self.get_play_url(item_id)
+                        "link": link
                     })
-                # 最近添加的剧集（按最新一集的 dateAdded）
+                # 最近添加的剧集（按最新一集的 dateAdded，一次性 LEFT JOIN uniqueid）
                 cursor.execute(
-                    "SELECT t.idShow, t.c00 AS title, MAX(f.dateAdded) AS maxDate "
+                    "SELECT t.idShow, t.c00 AS title, MAX(f.dateAdded) AS maxDate, "
+                    "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM tvshow t "
                     "JOIN episode e ON t.idShow = e.idShow "
                     "JOIN files f ON e.idFile = f.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
                     "WHERE f.dateAdded IS NOT NULL AND f.dateAdded != '' "
-                    "GROUP BY t.idShow "
+                    "GROUP BY t.idShow, t.c00 "
                     "ORDER BY maxDate DESC "
                     "LIMIT %s",
                     (num,)
                 )
                 for row in cursor.fetchall():
                     item_id = f"tvshow:{row['idShow']}"
+                    tmdbid = row.get('tmdbid') or ''
+                    link = f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else ""
                     ret_latest.append({
                         "id": item_id,
                         "name": row['title'],
                         "type": MediaType.TV.value,
                         "image": "",
-                        "link": self.get_play_url(item_id)
+                        "link": link
                     })
-                # 合并后按 dateAdded 倒序（简化处理：电影和剧集分别查询后截取）
                 result = ret_latest[:num]
                 Kodi._cache[cache_key] = result
                 return result
