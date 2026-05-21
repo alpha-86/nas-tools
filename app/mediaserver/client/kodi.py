@@ -647,6 +647,29 @@ class Kodi(_IMediaClient):
             conn.close()
         return {}
 
+    def _lookup_posters(self, item_ids):
+        """
+        从本地 MEDIASYNCITEMS 查询海报路径
+        :param item_ids: item_id 列表，如 ['movie:1', 'tvshow:2']
+        :return: dict {item_id: poster_path}
+        """
+        if not item_ids:
+            return {}
+        try:
+            from app.db import MediaDb
+            from app.db.models import MEDIASYNCITEMS
+            session = MediaDb().session
+            rows = session.query(MEDIASYNCITEMS.ITEM_ID, MEDIASYNCITEMS.POSTER).filter(
+                MEDIASYNCITEMS.SERVER == self.client_id,
+                MEDIASYNCITEMS.ITEM_ID.in_(item_ids),
+                MEDIASYNCITEMS.POSTER.isnot(None),
+                MEDIASYNCITEMS.POSTER != ''
+            ).all()
+            session.close()
+            return {r.ITEM_ID: r.POSTER for r in rows}
+        except Exception:
+            return {}
+
     def get_resume(self, num=12):
         """
         获得继续观看
@@ -661,6 +684,8 @@ class Kodi(_IMediaClient):
             if items:
                 ret_resume = []
                 domain = Config().get_domain() or ''
+                item_ids = [row.ITEM_ID for row in items]
+                posters = self._lookup_posters(item_ids)
                 for row in items:
                     tmdbid = row.TMDBID or ''
                     link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
@@ -670,7 +695,7 @@ class Kodi(_IMediaClient):
                         "id": row.ITEM_ID,
                         "name": row.TITLE or "",
                         "type": mtype,
-                        "image": "",
+                        "image": posters.get(row.ITEM_ID, ''),
                         "link": link,
                         "percent": percent
                     })
@@ -741,6 +766,11 @@ class Kodi(_IMediaClient):
                         "link": link,
                         "percent": percent
                     })
+                # 批量查询海报
+                item_ids = [r['id'] for r in ret_resume]
+                posters = self._lookup_posters(item_ids)
+                for r in ret_resume:
+                    r['image'] = posters.get(r['id'], '')
                 result = ret_resume[:num]
                 Kodi._cache[cache_key] = result
                 return result
@@ -765,6 +795,8 @@ class Kodi(_IMediaClient):
             if items:
                 ret_latest = []
                 domain = Config().get_domain() or ''
+                item_ids = [row.ITEM_ID for row in items]
+                posters = self._lookup_posters(item_ids)
                 for row in items:
                     tmdbid = row.TMDBID or ''
                     mtype = row.ITEM_TYPE or ''
@@ -773,7 +805,7 @@ class Kodi(_IMediaClient):
                         "id": row.ITEM_ID,
                         "name": row.TITLE or "",
                         "type": mtype,
-                        "image": "",
+                        "image": posters.get(row.ITEM_ID, ''),
                         "link": link
                     })
                 Kodi._cache[cache_key] = ret_latest
@@ -834,6 +866,11 @@ class Kodi(_IMediaClient):
                         "image": "",
                         "link": link
                     })
+                # 批量查询海报
+                item_ids = [r['id'] for r in ret_latest]
+                posters = self._lookup_posters(item_ids)
+                for r in ret_latest:
+                    r['image'] = posters.get(r['id'], '')
                 result = ret_latest[:num]
                 Kodi._cache[cache_key] = result
                 return result
