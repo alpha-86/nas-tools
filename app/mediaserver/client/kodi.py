@@ -688,8 +688,13 @@ class Kodi(_IMediaClient):
                 posters = self._lookup_posters(item_ids)
                 for row in items:
                     tmdbid = row.TMDBID or ''
-                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
-                    mtype = row.ITEM_TYPE or ''
+                    raw_type = row.ITEM_TYPE or ''
+                    if raw_type == 'Movie':
+                        mtype = MediaType.MOVIE.value
+                        link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
+                    else:
+                        mtype = MediaType.TV.value
+                        link = f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else ""
                     percent = round(row.PLAY_PERCENT or 0, 1)
                     ret_resume.append({
                         "id": row.ITEM_ID,
@@ -807,8 +812,13 @@ class Kodi(_IMediaClient):
                 posters = self._lookup_posters(item_ids)
                 for row in items:
                     tmdbid = row.TMDBID or ''
-                    mtype = row.ITEM_TYPE or ''
-                    link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid and mtype == 'Movie' else (f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else "")
+                    raw_type = row.ITEM_TYPE or ''
+                    if raw_type == 'Movie':
+                        mtype = MediaType.MOVIE.value
+                        link = f"{domain}/web#media_detail?id={tmdbid}&type=MOV" if tmdbid else ""
+                    else:
+                        mtype = MediaType.TV.value
+                        link = f"{domain}/web#media_detail?id={tmdbid}&type=TV" if tmdbid else ""
                     ret_latest.append({
                         "id": row.ITEM_ID,
                         "name": row.TITLE or "",
