@@ -737,20 +737,26 @@ class Kodi(_IMediaClient):
                         "link": link,
                         "percent": percent
                     })
+                # 剧集：按 lastPlayed 查询每集 bookmark，去重后保留每部剧最近一集
                 cursor.execute(
                     "SELECT b.timeInSeconds, b.totalTimeInSeconds, "
                     "e.idShow, e.c12 AS season, e.c13 AS episode, e.c00 AS title, "
+                    "f.lastPlayed, "
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM bookmark b JOIN episode e ON b.idFile = e.idFile "
+                    "JOIN files f ON f.idFile = e.idFile "
                     "LEFT JOIN uniqueid u ON u.media_id = e.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
                     "WHERE b.type = 1 "
-                    "GROUP BY b.idBookmark, e.idShow, e.c12, e.c13, e.c00, b.timeInSeconds, b.totalTimeInSeconds "
-                    "ORDER BY b.idBookmark DESC "
-                    "LIMIT %s",
-                    (num,)
+                    "GROUP BY b.idBookmark, e.idShow, e.c12, e.c13, e.c00, b.timeInSeconds, b.totalTimeInSeconds, f.lastPlayed "
+                    "ORDER BY f.lastPlayed DESC"
                 )
+                seen_shows = set()
                 for row in cursor.fetchall():
-                    item_id = f"tvshow:{row['idShow']}"
+                    show_id = row['idShow']
+                    if show_id in seen_shows:
+                        continue
+                    seen_shows.add(show_id)
+                    item_id = f"tvshow:{show_id}"
                     total = row['totalTimeInSeconds'] or 1
                     percent = round(row['timeInSeconds'] / total * 100, 1)
                     season = row['season'] or ''
@@ -766,6 +772,8 @@ class Kodi(_IMediaClient):
                         "link": link,
                         "percent": percent
                     })
+                    if len(ret_resume) >= num:
+                        break
                 # 批量查询海报
                 item_ids = [r['id'] for r in ret_resume]
                 posters = self._lookup_posters(item_ids)
@@ -920,31 +928,37 @@ class Kodi(_IMediaClient):
                         "play_total": row.get('totalTimeInSeconds'),
                         "play_percent": percent
                     })
-                # 剧集：通过 episode 关联 bookmark + files + uniqueid
+                # 剧集：查询每集的 bookmark，按 lastPlayed 降序，每个 tvshow 只保留最近一集
                 cursor.execute(
-                    "SELECT t.idShow, t.c00 AS title, "
-                    "MAX(b.timeInSeconds) AS maxTime, MAX(b.totalTimeInSeconds) AS maxTotal, "
-                    "MAX(f.lastPlayed) AS maxLastPlayed, MAX(f.dateAdded) AS maxDateAdded, "
+                    "SELECT e.idShow, t.c00 AS title, "
+                    "b.timeInSeconds, b.totalTimeInSeconds, "
+                    "f.lastPlayed, f.dateAdded, "
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
-                    "FROM tvshow t "
-                    "LEFT JOIN episode e ON e.idShow = t.idShow "
-                    "LEFT JOIN bookmark b ON b.idFile = e.idFile AND b.type = 1 "
-                    "LEFT JOIN files f ON f.idFile = e.idFile "
-                    "LEFT JOIN uniqueid u ON u.media_id = t.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
-                    "GROUP BY t.idShow, t.c00"
+                    "FROM episode e "
+                    "JOIN tvshow t ON t.idShow = e.idShow "
+                    "JOIN bookmark b ON b.idFile = e.idFile AND b.type = 1 "
+                    "JOIN files f ON f.idFile = e.idFile "
+                    "LEFT JOIN uniqueid u ON u.media_id = e.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
+                    "GROUP BY e.idShow, e.idEpisode, t.c00, b.timeInSeconds, b.totalTimeInSeconds, f.lastPlayed, f.dateAdded "
+                    "ORDER BY f.lastPlayed DESC"
                 )
+                seen_shows = set()
                 for row in cursor.fetchall():
-                    total = row['maxTotal'] or 1
-                    percent = round(row['maxTime'] / total * 100, 1) if row['maxTime'] else None
+                    show_id = row['idShow']
+                    if show_id in seen_shows:
+                        continue
+                    seen_shows.add(show_id)
+                    total = row['totalTimeInSeconds'] or 1
+                    percent = round(row['timeInSeconds'] / total * 100, 1)
                     db.insert_extra(self.client_id, {
-                        "id": f"tvshow:{row['idShow']}",
+                        "id": f"tvshow:{show_id}",
                         "type": "Series",
                         "title": row['title'],
                         "tmdbid": row.get('tmdbid') or '',
-                        "last_played": row.get('maxLastPlayed') or '',
-                        "date_added": row.get('maxDateAdded') or '',
-                        "play_time": row.get('maxTime'),
-                        "play_total": row.get('maxTotal'),
+                        "last_played": row.get('lastPlayed') or '',
+                        "date_added": row.get('dateAdded') or '',
+                        "play_time": row.get('timeInSeconds'),
+                        "play_total": row.get('totalTimeInSeconds'),
                         "play_percent": percent
                     })
             log.info(f"【{self.client_name}】额外数据同步完成")
