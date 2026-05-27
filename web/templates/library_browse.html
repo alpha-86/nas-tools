@@ -20,56 +20,112 @@
         <span class="visually-hidden">加载中...</span>
       </div>
     </div>
+    <div id="library_items_loadmore" class="text-center mt-3" style="display: none;">
+      <button class="btn btn-outline-primary" onclick="load_more_items()">加载更多</button>
+    </div>
   </div>
 </div>
 
 <script type="text/javascript">
-  // 加载库内媒体列表
-  function load_library_items() {
-    const library = '{{ Library }}';
-    const grid = document.getElementById('library_items_grid');
-    const loading = document.getElementById('library_items_loading');
+  // 分页加载配置（必须用 var，AJAX 加载的 script 中 const/let 不是全局的）
+  var PAGE_SIZE = 100;
+  var currentOffset = 0;
+  var isLoading = false;
+  var hasMore = true;
+  var library = '{{ Library }}';
+  var grid = document.getElementById('library_items_grid');
+  var loading = document.getElementById('library_items_loading');
+  var loadmore = document.getElementById('library_items_loadmore');
+
+  // 创建媒体项卡片
+  window.create_media_card = function(item) {
+    const card = document.createElement('a');
+    card.className = 'card card-link-pop rounded-3 overflow-hidden';
+    card.style.cursor = 'pointer';
+
+    // 构造媒体详情页链接
+    const mtype = item.type === 'Movie' ? 'MOV' : 'TV';
+    const detailUrl = '/web#media_detail?id=' + (item.tmdbid || '') + '&type=' + mtype;
+    card.href = detailUrl;
+
+    let imageHtml = '';
+    if (item.poster) {
+      imageHtml = '<custom-img img-class="w-100" img-src="' + item.poster + '" img-ratio="150%" img-style="object-fit: cover;"></custom-img>';
+    } else {
+      imageHtml = '<div class="bg-secondary text-white d-flex align-items-center justify-content-center" style="aspect-ratio: 2/3;"><span class="h4">' + (item.title || '未知') + '</span></div>';
+    }
+
+    const typeBadge = item.type === 'Movie'
+      ? '<span class="badge badge-pill bg-green" style="position: absolute; top: 10px; left: 10px">电影</span>'
+      : '<span class="badge badge-pill bg-blue" style="position: absolute; top: 10px; left: 10px">剧集</span>';
+
+    card.innerHTML = imageHtml + typeBadge +
+      '<div class="m-2 text-center" style="-webkit-line-clamp:2; display: -webkit-box; -webkit-box-orient:vertical; overflow:hidden; text-overflow: ellipsis;">' +
+      (item.title || '') + ' <span class="text-muted">(' + (item.year || '') + ')</span>' +
+      '</div>';
+
+    return card;
+  }
+
+  // 加载媒体项
+  window.load_items = function(offset) {
+    if (isLoading || !hasMore) return;
+
+    isLoading = true;
+    loading.style.display = 'block';
+    loadmore.style.display = 'none';
 
     ajax_post("get_library_items", {
       "library": library,
-      "limit": 100
+      "limit": PAGE_SIZE,
+      "offset": offset
     }, function (ret) {
+      isLoading = false;
       loading.style.display = 'none';
+
       if (ret.code === 0 && ret.items && ret.items.length > 0) {
         ret.items.forEach(function (item) {
-          const card = document.createElement('a');
-          card.className = 'card card-link-pop rounded-3 overflow-hidden';
-          card.style.cursor = 'pointer';
-
-          // 构造媒体详情页链接
-          const mtype = item.type === 'Movie' ? 'MOV' : 'TV';
-          const detailUrl = '/web#media_detail?id=' + (item.tmdbid || '') + '&type=' + mtype;
-          card.href = detailUrl;
-
-          let imageHtml = '';
-          if (item.poster) {
-            imageHtml = '<custom-img img-class="w-100" img-src="' + item.poster + '" img-ratio="150%" img-style="object-fit: cover;"></custom-img>';
-          } else {
-            imageHtml = '<div class="bg-secondary text-white d-flex align-items-center justify-content-center" style="aspect-ratio: 2/3;"><span class="h4">' + (item.title || '未知') + '</span></div>';
-          }
-
-          const typeBadge = item.type === 'Movie'
-            ? '<span class="badge badge-pill bg-green" style="position: absolute; top: 10px; left: 10px">电影</span>'
-            : '<span class="badge badge-pill bg-blue" style="position: absolute; top: 10px; left: 10px">剧集</span>';
-
-          card.innerHTML = imageHtml + typeBadge +
-            '<div class="m-2 text-center" style="-webkit-line-clamp:2; display: -webkit-box; -webkit-box-orient:vertical; overflow:hidden; text-overflow: ellipsis;">' +
-            (item.title || '') + ' <span class="text-muted">(' + (item.year || '') + ')</span>' +
-            '</div>';
-
-          grid.appendChild(card);
+          grid.appendChild(create_media_card(item));
         });
+
+        currentOffset = offset + ret.items.length;
+
+        // 如果返回的数量小于 PAGE_SIZE，说明没有更多数据了
+        if (ret.items.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          loadmore.style.display = 'block';
+        }
       } else {
-        grid.innerHTML = '<div class="col-12 text-center text-muted">暂无数据，请先执行媒体库同步</div>';
+        hasMore = false;
+        if (offset === 0) {
+          grid.innerHTML = '<div class="col-12 text-center text-muted">暂无数据，请先执行媒体库同步</div>';
+        }
       }
     });
   }
 
-  // 直接执行（AJAX 加载后 script 会立即运行）
-  load_library_items();
+  // 加载更多按钮点击事件
+  window.load_more_items = function() {
+    load_items(currentOffset);
+  };
+
+  // 滚动检测 - 当滚动到距离底部 200px 时自动加载更多
+  window.handle_scroll = function() {
+    if (isLoading || !hasMore) return;
+
+    var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    var scrollHeight = document.documentElement.scrollHeight;
+    var clientHeight = document.documentElement.clientHeight;
+
+    if (scrollTop + clientHeight >= scrollHeight - 200) {
+      load_items(currentOffset);
+    }
+  };
+
+  // 添加滚动事件监听
+  window.addEventListener('scroll', handle_scroll);
+
+  // 初始加载
+  load_items(0);
 </script>

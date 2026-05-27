@@ -258,15 +258,26 @@ class MediaDb:
             self.session.rollback()
             return False
 
-    def get_resume_items(self, server_type, num=12):
-        """从本地缓存获取继续观看（按 PLAY_TIME 降序）"""
+    def get_resume_items(self, server_type, num=12, item_type=None):
+        """从本地缓存获取继续观看（含播放进度和近期播放）"""
         if not server_type:
             return []
         try:
-            return self.session.query(KODISYNCEXTRA).filter(
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+            from sqlalchemy import or_
+            query = self.session.query(KODISYNCEXTRA).filter(
                 KODISYNCEXTRA.SERVER == server_type,
-                KODISYNCEXTRA.PLAY_TIME.isnot(None)
-            ).order_by(KODISYNCEXTRA.PLAY_TIME.desc()).limit(num).all()
+                or_(
+                    KODISYNCEXTRA.PLAY_TIME.isnot(None),
+                    KODISYNCEXTRA.LAST_PLAYED >= cutoff
+                )
+            )
+            if item_type:
+                query = query.filter(KODISYNCEXTRA.ITEM_TYPE == item_type)
+            # 按最近观看时间倒序排列
+            query = query.order_by(KODISYNCEXTRA.LAST_PLAYED.desc())
+            return query.limit(num).all()
         except Exception:
             return []
 

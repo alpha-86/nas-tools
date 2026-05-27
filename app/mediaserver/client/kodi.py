@@ -1,4 +1,5 @@
 import os
+import random
 
 import pymysql
 from cachetools import TTLCache, cached
@@ -372,11 +373,35 @@ class Kodi(_IMediaClient):
         total_episodes = [episode for episode in range(1, total_num + 1)]
         return list(set(total_episodes).difference(set(exists_episodes)))
 
+    def _get_random_posters(self, library, count=4):
+        """
+        从本地同步数据库获取指定库的随机海报路径列表
+        """
+        try:
+            from app.db import MediaDb
+            from app.db.models import MEDIASYNCITEMS
+            session = MediaDb().session
+            rows = session.query(MEDIASYNCITEMS.POSTER).filter(
+                MEDIASYNCITEMS.SERVER == self.client_id,
+                MEDIASYNCITEMS.LIBRARY == library,
+                MEDIASYNCITEMS.POSTER.isnot(None),
+                MEDIASYNCITEMS.POSTER != ''
+            ).all()
+            session.close()
+            posters = [r.POSTER for r in rows if r.POSTER]
+            if len(posters) <= count:
+                return posters
+            return random.sample(posters, count)
+        except Exception:
+            return []
+
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
         Kodi 按视频类型分为电影和剧集两个库
         """
+        movie_posters = self._get_random_posters('movies')
+        tv_posters = self._get_random_posters('tvshows')
         return [
             {
                 'id': 'movies',
@@ -384,6 +409,7 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.MOVIE.value,
                 'image': '',
+                'image_list': ','.join(movie_posters),
                 'link': '',
                 'navpage': 'library_browse?library=movies&name=电影'
             },
@@ -393,6 +419,7 @@ class Kodi(_IMediaClient):
                 'path': '',
                 'type': MediaType.TV.value,
                 'image': '',
+                'image_list': ','.join(tv_posters),
                 'link': '',
                 'navpage': 'library_browse?library=tvshows&name=剧集'
             }
@@ -680,7 +707,10 @@ class Kodi(_IMediaClient):
             return list(Kodi._cache[cache_key])
         try:
             from app.db import MediaDb
-            items = MediaDb().get_resume_items(self.client_id, num)
+            mdb = MediaDb()
+            items_movies = mdb.get_resume_items(self.client_id, num, item_type='Movie')
+            items_tv = mdb.get_resume_items(self.client_id, num, item_type='Series')
+            items = list(items_movies) + list(items_tv)
             if items:
                 ret_resume = []
                 domain = Config().get_domain() or ''
@@ -946,7 +976,7 @@ class Kodi(_IMediaClient):
                     "MAX(CASE WHEN u.type = 'tmdb' THEN u.value END) AS tmdbid "
                     "FROM episode e "
                     "JOIN tvshow t ON t.idShow = e.idShow "
-                    "JOIN bookmark b ON b.idFile = e.idFile AND b.type = 1 "
+                    "LEFT JOIN bookmark b ON b.idFile = e.idFile AND b.type = 1 "
                     "JOIN files f ON f.idFile = e.idFile "
                     "LEFT JOIN uniqueid u ON u.media_id = e.idShow AND u.media_type = 'tvshow' AND u.type = 'tmdb' "
                     "GROUP BY e.idShow, e.idEpisode, t.c00, b.timeInSeconds, b.totalTimeInSeconds, f.lastPlayed, f.dateAdded "
@@ -959,7 +989,7 @@ class Kodi(_IMediaClient):
                         continue
                     seen_shows.add(show_id)
                     total = row['totalTimeInSeconds'] or 1
-                    percent = round(row['timeInSeconds'] / total * 100, 1)
+                    percent = round(row['timeInSeconds'] / total * 100, 1) if row['timeInSeconds'] else None
                     db.insert_extra(self.client_id, {
                         "id": f"tvshow:{show_id}",
                         "type": "Series",

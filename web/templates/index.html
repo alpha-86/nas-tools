@@ -64,7 +64,7 @@
                         img-ratio="50%"
                         img-style="object-fit: cover;"
             ></custom-img>
-          {% else %}
+          {% elif Library.image_list %}
             <custom-plex-library-img img-src-list='{{ Library.image_list }}'></custom-plex-library-img>
           {% endif %}
             <div class="m-2 text-center">
