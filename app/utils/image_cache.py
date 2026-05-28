@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import hashlib
 import os
+import random
+import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from app.utils.commons import singleton
 from app.utils.http_utils import RequestUtils
@@ -15,8 +17,39 @@ _DOMAIN_HEADERS = {
     },
 }
 
+# 豆瓣图片 CDN 域名列表，用于负载均衡
+_DOUBAN_CDN_HOSTS = [
+    "img1.doubanio.com",
+    "img2.doubanio.com",
+    "img3.doubanio.com",
+    "img9.doubanio.com",
+    "qnmob3.doubanio.com",
+]
+
 # 默认缓存 TTL（秒）
 _DEFAULT_TTL = 30 * 24 * 3600
+
+
+def _normalize_douban_host(url):
+    """
+    将 img{N}.doubanio.com / qnmob3.doubanio.com 统一替换为
+    img.doubanio.com，保证同一图片在不同 CDN 域名下共享同一个缓存文件。
+    """
+    return re.sub(r'://(?:qnmob\d+|img\d+)\.doubanio\.com',
+                  '://img.doubanio.com', url)
+
+
+def _randomize_douban_host(url):
+    """
+    将 img.doubanio.com（或任意 doubanio.com 主机）随机替换为
+    实际 CDN 域名，实现负载均衡。
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host.endswith("doubanio.com"):
+        return url
+    chosen = random.choice(_DOUBAN_CDN_HOSTS)
+    return urlunparse(parsed._replace(netloc=chosen))
 
 
 @singleton
@@ -25,7 +58,8 @@ class ImageCache:
     通用图片磁盘缓存。
     - 按 URL SHA-256 存储到 <config_dir>/cache/images/
     - 命中缓存直接返回，不重新拉取
-    - 自动为特定域名（如 doubanio.com）注入专用 UA / Referer
+    - doubanio.com 多 CDN 域名自动归一化缓存 + 随机负载均衡
+    - 自动为特定域名注入专用 UA / Referer
     """
 
     def __init__(self):
@@ -42,7 +76,9 @@ class ImageCache:
         获取图片二进制内容。
         优先从磁盘缓存读取；未命中或已过期则发起 HTTP 请求并写入缓存。
         """
-        path = self._cache_path(url)
+        # 缓存 key 使用归一化后的 URL（doubanio CDN 域名统一）
+        cache_key_url = _normalize_douban_host(url)
+        path = self._cache_path(cache_key_url)
 
         # 命中缓存：文件存在且未过期
         if os.path.isfile(path):
@@ -51,8 +87,9 @@ class ImageCache:
                 with open(path, "rb") as f:
                     return f.read()
 
-        # 未命中：发起请求
-        content = self._fetch(url)
+        # 未命中：随机选择 CDN 域名后发起请求
+        fetch_url = _randomize_douban_host(url)
+        content = self._fetch(fetch_url)
         if content:
             self._write(path, content)
         return content
