@@ -8,6 +8,7 @@ import log
 from app.media.doubanapi import DoubanApi, DoubanWeb
 from app.media.meta import MetaInfo
 from app.utils import ExceptionUtils, StringUtils
+from app.utils.url_utils import wrap_image_url
 from app.utils import RequestUtils
 from app.utils.commons import singleton
 from app.utils.types import MediaType
@@ -211,7 +212,7 @@ class DouBan:
             meta_info.tmdb_id = "DB:%s" % item.get("id")
             meta_info.douban_id = item.get("id")
             meta_info.overview = item.get("card_subtitle") or ""
-            meta_info.poster_path = item.get("cover_url").split('?')[0]
+            meta_info.poster_path = wrap_image_url(item.get("cover_url").split('?')[0])
             rating = item.get("rating", {}) or {}
             meta_info.vote_average = rating.get("value")
             if meta_info not in ret_medias:
@@ -457,7 +458,7 @@ class DouBan:
                 'media_type': mtype.value,
                 'year': year[:4] if year else "",
                 'vote': vote_average,
-                'image': poster_path,
+                'image': wrap_image_url(poster_path),
                 'overview': overview
             })
         return ret_infos

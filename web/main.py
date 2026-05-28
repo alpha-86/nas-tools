@@ -40,6 +40,7 @@ from app.subscribe import Subscribe
 from app.sync import Sync
 from app.torrentremover import TorrentRemover
 from app.utils import DomUtils, SystemUtils, ExceptionUtils, StringUtils
+from app.utils.image_cache import ImageCache
 from app.utils.types import *
 from config import PT_TRANSFER_INTERVAL, Config, TMDB_API_DOMAINS
 from web.action import WebAction
@@ -1701,27 +1702,29 @@ def ical():
 
 
 @App.route('/img')
-@login_required
 def Img():
     """
-    图片中换服务
+    通用图片代理服务。
+    自动为 doubanio.com 等受限域名注入专用 UA / Referer，
+    并将图片缓存到磁盘，命中缓存不再重新拉取。
     """
     url = request.args.get('url')
     if not url:
         return make_response("参数错误", 400)
-    # 计算Etag
+    # 协商缓存：ETag = URL 的 SHA-256
     etag = hashlib.sha256(url.encode('utf-8')).hexdigest()
-    # 检查协商缓存
     if_none_match = request.headers.get('If-None-Match')
     if if_none_match and if_none_match == etag:
         return make_response('', 304)
-    # 获取图片数据
-    response = Response(
-        WebUtils.request_cache(url),
-        mimetype='image/jpeg'
-    )
-    response.headers.set('Cache-Control', 'max-age=604800')
-    response.headers.set('Etag', etag)
+    # 从磁盘缓存获取（未命中则自动拉取并写入）
+    content = ImageCache().get(url)
+    if not content:
+        return make_response("图片获取失败", 502)
+    # 根据 URL 后缀推断 MIME 类型
+    content_type = mimetypes.guess_type(url)[0] or 'image/jpeg'
+    response = Response(content, mimetype=content_type)
+    response.headers['Cache-Control'] = 'max-age=604800'
+    response.headers['Etag'] = etag
     return response
 
 
