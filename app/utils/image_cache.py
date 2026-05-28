@@ -77,10 +77,14 @@ class ImageCache:
     # ------------------------------------------------------------------ #
     #  公开接口
     # ------------------------------------------------------------------ #
+    # 最大重试次数
+    _MAX_RETRIES = 3
+
     def get(self, url):
         """
         获取图片二进制内容。
         优先从磁盘缓存读取；未命中或已过期则发起 HTTP 请求并写入缓存。
+        失败时自动重试，每次使用不同的 CDN 域名。
         """
         # 缓存 key 使用归一化后的 URL（doubanio CDN 域名统一）
         cache_key_url = _normalize_douban_host(url)
@@ -93,13 +97,18 @@ class ImageCache:
                 with open(path, "rb") as f:
                     return f.read()
 
-        # 未命中：轮询分配 CDN 域名后发起请求
-        host = next(self._cdn_cycle)
-        fetch_url = _assign_douban_host(url, host)
-        content = self._fetch(fetch_url)
-        if content:
-            self._write(path, content)
-        return content
+        # 未命中：重试，每次轮询分配不同 CDN 域名
+        for attempt in range(self._MAX_RETRIES):
+            host = next(self._cdn_cycle)
+            fetch_url = _assign_douban_host(url, host)
+            content = self._fetch(fetch_url)
+            if content:
+                self._write(path, content)
+                return content
+            # 失败后短暂等待再重试
+            if attempt < self._MAX_RETRIES - 1:
+                time.sleep(0.5 * (attempt + 1))
+        return None
 
     # ------------------------------------------------------------------ #
     #  内部方法
