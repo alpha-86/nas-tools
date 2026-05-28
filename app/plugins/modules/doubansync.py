@@ -12,6 +12,7 @@ from app.media import DouBan
 from app.media.meta import MetaInfo
 from app.plugins import EventHandler
 from app.plugins.modules._base import _IPluginModule
+from app.utils.url_utils import wrap_image_url
 from app.searcher import Searcher
 from app.subscribe import Subscribe
 from app.utils import ExceptionUtils
@@ -702,7 +703,7 @@ class DoubanSync(_IPluginModule):
             meta_info.douban_id = doubanid
             meta_info.type = media_type
             meta_info.overview = douban_info.get("intro")
-            meta_info.poster_path = douban_info.get("cover_url")
+            meta_info.poster_path = wrap_image_url(douban_info.get("cover_url"))
             rating = douban_info.get("rating", {}) or {}
             meta_info.vote_average = rating.get("value") or ""
             meta_info.imdb_id = douban_info.get("imdbid")
