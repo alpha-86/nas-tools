@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 import hashlib
 import os
-import random
 import re
+import threading
 import time
+from itertools import cycle
 from urllib.parse import urlparse, urlunparse
 
 from app.utils.commons import singleton
@@ -39,17 +40,14 @@ def _normalize_douban_host(url):
                   '://img.doubanio.com', url)
 
 
-def _randomize_douban_host(url):
+def _assign_douban_host(url, host):
     """
-    将 img.doubanio.com（或任意 doubanio.com 主机）随机替换为
-    实际 CDN 域名，实现负载均衡。
+    将任意 doubanio.com 主机替换为指定 CDN 域名。
     """
     parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if not host.endswith("doubanio.com"):
+    if not (parsed.hostname or "").lower().endswith("doubanio.com"):
         return url
-    chosen = random.choice(_DOUBAN_CDN_HOSTS)
-    return urlunparse(parsed._replace(netloc=chosen))
+    return urlunparse(parsed._replace(netloc=host))
 
 
 @singleton
@@ -58,15 +56,23 @@ class ImageCache:
     通用图片磁盘缓存。
     - 按 URL SHA-256 存储到 <config_dir>/cache/images/
     - 命中缓存直接返回，不重新拉取
-    - doubanio.com 多 CDN 域名自动归一化缓存 + 随机负载均衡
+    - doubanio.com 多 CDN 域名归一化缓存 + 轮询负载均衡
+    - 信号量控制并发，避免触发远端限流
     - 自动为特定域名注入专用 UA / Referer
     """
+
+    # 最大并发请求数
+    _MAX_CONCURRENCY = 5
 
     def __init__(self):
         from config import Config
         self._cache_dir = os.path.join(Config().get_config_path(), "cache", "images")
         os.makedirs(self._cache_dir, exist_ok=True)
         self._ttl = _DEFAULT_TTL
+        # 信号量：限制同时发往远端的请求数
+        self._sem = threading.Semaphore(self._MAX_CONCURRENCY)
+        # 轮询迭代器：并发请求分配不同 CDN 域名
+        self._cdn_cycle = cycle(_DOUBAN_CDN_HOSTS)
 
     # ------------------------------------------------------------------ #
     #  公开接口
@@ -87,8 +93,9 @@ class ImageCache:
                 with open(path, "rb") as f:
                     return f.read()
 
-        # 未命中：随机选择 CDN 域名后发起请求
-        fetch_url = _randomize_douban_host(url)
+        # 未命中：轮询分配 CDN 域名后发起请求
+        host = next(self._cdn_cycle)
+        fetch_url = _assign_douban_host(url, host)
         content = self._fetch(fetch_url)
         if content:
             self._write(path, content)
@@ -115,14 +122,15 @@ class ImageCache:
     def _fetch(self, url):
         """
         发起带完整 headers 的 HTTP GET 请求。
+        通过信号量控制并发数，避免触发远端限流。
         doubanio.com 等域名自动使用专用 UA / Referer，其余使用系统默认 UA。
-        同时使用用户配置的代理（如有）。
         """
         from config import Config
         headers = self._domain_headers(url)
         if headers:
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
         proxies = Config().get_proxies() or None
+        self._sem.acquire()
         try:
             resp = RequestUtils(
                 headers=headers or None,
@@ -132,6 +140,8 @@ class ImageCache:
                 return resp.content
         except Exception:
             pass
+        finally:
+            self._sem.release()
         return None
 
     def _write(self, path, content):
