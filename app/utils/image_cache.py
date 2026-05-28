@@ -134,9 +134,9 @@ class ImageCache:
             pass
         return None
 
-    @staticmethod
-    def _write(path, content):
+    def _write(self, path, content):
         """原子写入：先写 .tmp 再 rename，避免读到半截文件。"""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
         try:
             with open(tmp, "wb") as f:
