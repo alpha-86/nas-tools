@@ -926,9 +926,8 @@ class ModuleConf(object):
             "sort": {
                 "name": "排序",
                 "type": "dropdown",
-                "options": [{'value': '', 'name': '默认'},
+                "options": [{'value': 'T', 'name': '近期热度'},
                             {'value': 'U', 'name': '综合排序'},
-                            {'value': 'T', 'name': '近期热度'},
                             {'value': 'S', 'name': '高分优先'},
                             {'value': 'R', 'name': '首播时间'}]
             },
@@ -956,9 +955,8 @@ class ModuleConf(object):
             "sort": {
                 "name": "排序",
                 "type": "dropdown",
-                "options": [{'value': '', 'name': '默认'},
+                "options": [{'value': 'T', 'name': '近期热度'},
                             {'value': 'U', 'name': '综合排序'},
-                            {'value': 'T', 'name': '近期热度'},
                             {'value': 'S', 'name': '高分优先'},
                             {'value': 'R', 'name': '首播时间'}]
             },
