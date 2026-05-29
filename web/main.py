@@ -93,10 +93,6 @@ LoginManager = LoginManager()
 LoginManager.login_view = "login"
 LoginManager.init_app(App)
 
-# SSE
-LoggingSource = ""
-LoggingLock = Lock()
-
 # 路由注册
 App.register_blueprint(apiv1_bp, url_prefix="/api/v1")
 
@@ -1739,22 +1735,16 @@ def stream_logging():
         """
         实时日志
         """
-        global LoggingSource
-
+        last_seq = 0
         while True:
-            with LoggingLock:
-                if _source != LoggingSource:
-                    LoggingSource = _source
-                    log.LOG_INDEX = len(log.LOG_QUEUE)
-                if log.LOG_INDEX > 0:
-                    logs = list(log.LOG_QUEUE)[-log.LOG_INDEX:]
-                    log.LOG_INDEX = 0
-                    if _source:
-                        logs = [lg for lg in logs if lg.get("source") == _source]
-                else:
-                    logs = []
-                time.sleep(1)
-                yield 'data: %s\n\n' % json.dumps(logs)
+            logs = list(log.LOG_QUEUE)
+            if _source:
+                logs = [lg for lg in logs if lg.get("source") == _source]
+            new_logs = [lg for lg in logs if lg.get("_seq", 0) > last_seq]
+            if new_logs:
+                last_seq = new_logs[-1]["_seq"]
+            time.sleep(1)
+            yield 'data: %s\n\n' % json.dumps(new_logs)
 
     return Response(
         __logging(request.args.get("source") or ""),

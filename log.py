@@ -13,7 +13,7 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 lock = threading.Lock()
 
 LOG_QUEUE = deque(maxlen=200)
-LOG_INDEX = 0
+LOG_SEQ = 0
 
 
 class Logger:
@@ -74,7 +74,7 @@ class Logger:
 
 
 def __append_log_queue(level, text):
-    global LOG_INDEX, LOG_QUEUE
+    global LOG_SEQ, LOG_QUEUE
     with lock:
         text = escape(text)
         if text.startswith("【"):
@@ -82,12 +82,13 @@ def __append_log_queue(level, text):
             text = text.replace(f"【{source}】", "")
         else:
             source = "System"
+        LOG_SEQ += 1
         LOG_QUEUE.append({
             "time": time.strftime('%H:%M:%S', time.localtime(time.time())),
             "level": level,
             "source": source,
-            "text": text})
-        LOG_INDEX += 1
+            "text": text,
+            "_seq": LOG_SEQ})
 
 
 def debug(text, module=None):
