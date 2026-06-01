@@ -6,8 +6,6 @@
 
 `NAStool/nas-tools` 已归档并停止维护，且上游曾删除或下线代码，不再作为可持续维护的主线使用。本项目是个人维护的一份 nas-tools 代码，用于自用部署、兼容性修复、安全整改和功能增强。
 
-当前 GitHub 仓库已不是 fork 关系。使用 `gh repo view alpha-86/nas-tools --json isFork,parent` 查询结果为 `isFork=false`、`parent=null`。
-
 ## 本分支主要迭代
 
 - Docker 运行环境升级：使用 Alpine latest、Python 3.12、虚拟环境安装依赖，并升级 ffmpeg / VAAPI 相关运行时组件。
