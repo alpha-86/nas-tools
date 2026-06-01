@@ -2,7 +2,23 @@
 
 这是一个面向个人 NAS / 家庭影音服务器的媒体库自动化系统。它把 PT 站点检索、RSS 订阅、下载器管理、文件整理、媒体识别、元数据刮削、媒体服务器联动和消息通知串在一起，目标是减少从“发现资源”到“媒体库可播放”之间的手工操作。
 
-本项目基于 [NAStool/nas-tools](https://github.com/NAStool/nas-tools) 维护，当前仓库是个人维护分支，主要用于自用部署、兼容性修复和功能增强。
+## 项目说明
+
+`NAStool/nas-tools` 已归档并停止维护，且上游曾删除或下线代码，不再作为可持续维护的主线使用。本项目是个人维护的一份 nas-tools 代码，用于自用部署、兼容性修复、安全整改和功能增强。
+
+当前 GitHub 仓库已不是 fork 关系。使用 `gh repo view alpha-86/nas-tools --json isFork,parent` 查询结果为 `isFork=false`、`parent=null`。
+
+## 本分支主要迭代
+
+- Docker 运行环境升级：使用 Alpine latest、Python 3.12、虚拟环境安装依赖，并升级 ffmpeg / VAAPI 相关运行时组件。
+- 依赖安全修复：升级 Flask、Werkzeug、Pillow、cryptography、lxml、urllib3、Mako、PyJWT 等存在安全告警的 Python 依赖。
+- 安全整改：移除失效的 `nastool.org` 远程调用，收敛自动更新执行面，替换危险 `eval()`、pickle 缓存和不安全 YAML 加载，恢复默认 TLS 证书校验，加强 API Key、Webhook、弱口令和 Session Cookie 处理。
+- 用户与站点配置兼容：补齐纯 Python 用户/站点配置模块，减少对特定 Python 版本 `.so` 文件的依赖，适配 Python 3.10 / 3.12 运行环境。
+- Kodi MySQL 媒体服务器支持：新增只读 Kodi MySQL 视频库接入，支持媒体存在性检查、媒体库同步、首页继续观看/最新入库/活动数据、海报缓存和内置媒体库浏览。
+- 媒体识别映射统一：使用 `media_mapping.yaml` 统一替代旧的 `video_name_mapping.yaml`，支持按名称、类型和 TMDB ID 更稳定地修正识别结果。
+- FFmpeg 缩略图增强：重构缩略图命令构建，修复 Intel GPU 路径问题，增加 HDR / Dolby Vision tone-mapping，支持 GPU 失败后降级到 CPU。
+- 豆瓣与图片缓存优化：修复豆瓣排序默认值，代理豆瓣海报图片并增加磁盘缓存、CDN 轮询和失败重试，减少反盗链和外部 CDN 波动影响。
+- Web 体验与稳定性修复：优化实时日志连接序号跟踪，修复首页媒体库跳转、空链接、Kodi 同步并发、海报同步线程隔离等问题。
 
 ## 它能做什么
 
